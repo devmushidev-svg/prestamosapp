@@ -788,6 +788,11 @@ begin
     when monto_pagado >= monto then 'pagada'
     when fecha_vencimiento < v_hoy then 'vencida'
     else 'pendiente'
+  end
+  where estado is distinct from case
+    when monto_pagado >= monto then 'pagada'
+    when fecha_vencimiento < v_hoy then 'vencida'
+    else 'pendiente'
   end;
 
   update public.prestamos p
