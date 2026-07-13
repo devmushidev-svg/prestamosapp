@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, HandCoins, Landmark, TrendingUp, Users } from "lucide-react";
+import { AlertTriangle, ArrowRight, FilePlus2, HandCoins, Landmark, TrendingUp, Users, WalletCards } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
@@ -142,6 +142,7 @@ export function DashboardPage() {
             sub={`${kpis.prestamosCount} préstamo${kpis.prestamosCount !== 1 ? "s" : ""}`}
             icon={HandCoins}
             accent="primary"
+            to="/prestamos"
           />
           <KpiCard
             label="Por cobrar"
@@ -149,6 +150,7 @@ export function DashboardPage() {
             sub={`${kpis.conSaldoCount} con saldo`}
             icon={Landmark}
             accent="info"
+            to="/prestamos"
           />
           <KpiCard
             label="En mora"
@@ -156,6 +158,7 @@ export function DashboardPage() {
             sub={`${kpis.moraCount} préstamo${kpis.moraCount !== 1 ? "s" : ""}`}
             icon={AlertTriangle}
             accent={kpis.moraCount > 0 ? "danger" : "success"}
+            to="/prestamos"
           />
           <KpiCard
             label="Cobrado hoy"
@@ -167,11 +170,15 @@ export function DashboardPage() {
         </div>
       )}
 
-      {/* Acceso rápido — se agregan Nuevo préstamo / Pagos / Reportes conforme avanza el MVP */}
+      {/* Acceso rápido — pagos y reportes se agregan en las siguientes fases del MVP. */}
       <div>
         <p className="mb-3 text-xs font-bold uppercase tracking-widest text-pf-muted">Acceso rápido</p>
-        <div className="grid max-w-sm grid-cols-1 gap-2">
-          {[{ to: "/clientes", label: "Clientes", icon: Users, primary: true }].map(
+        <div className="grid max-w-2xl grid-cols-1 gap-2 sm:grid-cols-3">
+          {[
+            { to: "/prestamos/nuevo", label: "Nuevo préstamo", icon: FilePlus2, primary: true },
+            { to: "/prestamos", label: "Préstamos", icon: WalletCards, primary: false },
+            { to: "/clientes", label: "Clientes", icon: Users, primary: false },
+          ].map(
             ({ to, label, icon: Icon, primary }) => (
               <Link
                 key={to}

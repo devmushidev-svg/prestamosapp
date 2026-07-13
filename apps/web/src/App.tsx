@@ -6,6 +6,9 @@ import { LoginPage } from "./pages/LoginPage";
 
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const CustomersPage = lazy(() => import("./pages/CustomersPage").then((m) => ({ default: m.CustomersPage })));
+const LoansPage = lazy(() => import("./pages/LoansPage").then((m) => ({ default: m.LoansPage })));
+const NewLoanPage = lazy(() => import("./pages/NewLoanPage").then((m) => ({ default: m.NewLoanPage })));
+const LoanDetailPage = lazy(() => import("./pages/LoanDetailPage").then((m) => ({ default: m.LoanDetailPage })));
 
 function RouteFallback() {
   return (
@@ -44,6 +47,9 @@ export default function App() {
       >
         <Route index element={<DashboardPage />} />
         <Route path="clientes" element={<CustomersPage />} />
+        <Route path="prestamos" element={<LoansPage />} />
+        <Route path="prestamos/nuevo" element={<NewLoanPage />} />
+        <Route path="prestamos/:loanId" element={<LoanDetailPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -25,8 +25,10 @@
   users to sign up**; ocultar el registro en la interfaz no bloquea el endpoint
   público de Supabase.
 - **Esquema de la base:** [`supabase/schema.sql`](supabase/schema.sql) — se pega
-  una vez en el SQL Editor de Supabase. Tablas: `clientes`, `prestamos`,
-  `cuotas`, `pagos`, todas con RLS “solo autenticados”.
+  en el SQL Editor de Supabase y se vuelve a ejecutar cuando cambie. Tablas:
+  `clientes`, `prestamos`, `cuotas`, `pagos`, todas con RLS “solo
+  autenticados”. Incluye la función transaccional
+  `crear_prestamo_con_cuotas`.
 
 > El backend original (Hono + Prisma + SQLite, `apps/api`) fue **eliminado**:
 > no servía para Vercel (serverless, SQLite no persiste). Si necesitas ver cómo
@@ -70,8 +72,9 @@ Moneda: Lempira, símbolo `L` (`formatMoney` en
 
 1. ✅ Login (Supabase Auth) + Clientes + Panel con 4 KPIs (Total prestado,
    Por cobrar, En mora, Cobrado hoy).
-2. ⬜ Crear préstamo + generar tabla de cuotas. **El método de interés (fijo vs.
-   amortización francesa) lo decide el usuario — preguntar antes de implementar.**
+2. ✅ Listar/crear/ver préstamo + generar tabla de cuotas. Interés **fijo total**:
+   se aplica una sola vez al capital; las cuotas se distribuyen en centavos y
+   suman exactamente el saldo inicial.
 3. ⬜ Registrar pagos + actualizar saldo y estado del préstamo.
 4. ⬜ Comprobante de pago + reportes de cartera (morosidad, cobros por período).
 
@@ -94,8 +97,9 @@ npm install        # en la raíz
 npm run dev        # web en http://localhost:5173 (datos van directo a Supabase)
 ```
 
-Requisitos una sola vez: ejecutar `supabase/schema.sql` en el SQL Editor de
-Supabase y crear un usuario en Authentication → Users.
+Requisitos: ejecutar o volver a ejecutar `supabase/schema.sql` en el SQL Editor
+de Supabase después de cambios del esquema, y crear un usuario en
+Authentication → Users.
 
 ## Despliegue (Vercel)
 

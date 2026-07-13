@@ -22,6 +22,7 @@ export type Prestamo = {
   fecha_inicio: string;
   saldo: number;
   estado: EstadoPrestamo;
+  solicitud_id: string | null;
   creado_en: string;
 };
 

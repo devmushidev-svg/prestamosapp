@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { ChevronDown, Home, LogOut, Menu, User, Users, Wallet, X } from "lucide-react";
+import { ChevronDown, FilePlus2, HandCoins, Home, LogOut, Menu, User, Users, Wallet, X } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { BrandLockup, BrandLogo } from "../components/BrandLogo";
@@ -27,6 +27,13 @@ const RIBBON: Record<TabId, RibbonGroupDef[]> = {
   inicio: [],
   cartera: [
     {
+      title: "Préstamos",
+      items: [
+        { to: "/prestamos", label: "Préstamos", icon: HandCoins, end: true },
+        { to: "/prestamos/nuevo", label: "Nuevo préstamo", icon: FilePlus2 },
+      ],
+    },
+    {
       title: "Clientes",
       items: [{ to: "/clientes", label: "Clientes", icon: Users }],
     },
@@ -35,7 +42,7 @@ const RIBBON: Record<TabId, RibbonGroupDef[]> = {
 
 const TAB_DEFAULT_PATH: Record<TabId, string> = {
   inicio: "/",
-  cartera: "/clientes",
+  cartera: "/prestamos",
 };
 
 function tabFromPath(pathname: string): TabId {
