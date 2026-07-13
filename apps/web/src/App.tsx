@@ -12,6 +12,10 @@ const NewLoanPage = lazy(() => import("./pages/NewLoanPage").then((m) => ({ defa
 const LoanDetailPage = lazy(() => import("./pages/LoanDetailPage").then((m) => ({ default: m.LoanDetailPage })));
 const BusinessSetupPage = lazy(() => import("./pages/BusinessConfigPage").then((m) => ({ default: m.BusinessSetupPage })));
 const BusinessSettingsPage = lazy(() => import("./pages/BusinessConfigPage").then((m) => ({ default: m.BusinessSettingsPage })));
+const PaymentsPage = lazy(() => import("./pages/PaymentsPage").then((m) => ({ default: m.PaymentsPage })));
+const NewPaymentPage = lazy(() => import("./pages/NewPaymentPage").then((m) => ({ default: m.NewPaymentPage })));
+const PaymentReceiptPage = lazy(() => import("./pages/PaymentReceiptPage").then((m) => ({ default: m.PaymentReceiptPage })));
+const ReportsPage = lazy(() => import("./pages/ReportsPage").then((m) => ({ default: m.ReportsPage })));
 
 function RouteFallback() {
   return (
@@ -66,6 +70,10 @@ export default function App() {
         <Route path="prestamos/nuevo" element={<NewLoanPage />} />
         <Route path="prestamos/:loanId" element={<LoanDetailPage />} />
         <Route path="configuracion" element={<BusinessSettingsPage />} />
+        <Route path="pagos" element={<PaymentsPage />} />
+        <Route path="pagos/nuevo" element={<NewPaymentPage />} />
+        <Route path="pagos/:paymentId/recibo" element={<PaymentReceiptPage />} />
+        <Route path="reportes" element={<ReportsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

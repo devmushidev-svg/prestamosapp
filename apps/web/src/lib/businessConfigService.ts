@@ -12,7 +12,7 @@ function isMissingTable(error: { code?: string; message?: string }) {
 export async function getBusinessConfig(): Promise<BusinessConfigResult> {
   const { data, error } = await supabase
     .from("configuracion_prestamista")
-    .select("id,nombre_negocio,nombre_propietario,rtn,direccion,telefono,creado_en,actualizado_en")
+    .select("id,nombre_negocio,nombre_propietario,rtn,direccion,telefono,prefijo_recibo,digitos_recibo,creado_en,actualizado_en")
     .eq("id", 1)
     .maybeSingle();
 
@@ -38,7 +38,7 @@ export async function upsertBusinessConfig(input: ConfiguracionPrestamistaInput)
   const { data, error } = await supabase
     .from("configuracion_prestamista")
     .upsert(row, { onConflict: "id" })
-    .select("id,nombre_negocio,nombre_propietario,rtn,direccion,telefono,creado_en,actualizado_en")
+    .select("id,nombre_negocio,nombre_propietario,rtn,direccion,telefono,prefijo_recibo,digitos_recibo,creado_en,actualizado_en")
     .single();
   if (error) throw error;
   return data as ConfiguracionPrestamista;

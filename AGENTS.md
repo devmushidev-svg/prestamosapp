@@ -26,9 +26,10 @@
   público de Supabase.
 - **Esquema de la base:** [`supabase/schema.sql`](supabase/schema.sql) — se pega
   en el SQL Editor de Supabase y se vuelve a ejecutar cuando cambie. Tablas:
-  `configuracion_prestamista`, `clientes`, `prestamos`, `cuotas`, `pagos`, todas con RLS “solo
-  autenticados”. Incluye la función transaccional
-  `crear_prestamo_con_cuotas`.
+  `configuracion_prestamista`, `clientes`, `prestamos`, `cuotas`, `pagos` y
+  `pago_aplicaciones`, todas con RLS “solo autenticados”. Incluye las funciones
+  transaccionales `crear_prestamo_con_cuotas`, `registrar_pago` y
+  `actualizar_estados_cartera`.
 
 > El backend original (Hono + Prisma + SQLite, `apps/api`) fue **eliminado**:
 > no servía para Vercel (serverless, SQLite no persiste). Si necesitas ver cómo
@@ -64,9 +65,12 @@
   (nº cuotas), frecuencia (semanal/quincenal/mensual), fecha_inicio,
   fecha_primer_pago, saldo,
   estado (activo/al_dia/en_mora/pagado/cancelado).
-- **cuotas**: prestamo_id, numero, fecha_vencimiento, monto,
+- **cuotas**: prestamo_id, numero, fecha_vencimiento, monto, monto_pagado,
   estado (pendiente/pagada/vencida).
-- **pagos**: prestamo_id, cuota_id, fecha, monto, recibo (nº comprobante).
+- **pagos**: una fila por cobro/recibo; solicitud idempotente, número de recibo,
+  fecha, monto, saldos anterior/posterior y snapshot inmutable del comprobante.
+- **pago_aplicaciones**: reparto de cada pago entre una o varias cuotas; permite
+  pagos parciales sin duplicar recibos.
 
 Tipos TypeScript en [`apps/web/src/types.ts`](apps/web/src/types.ts).
 Moneda: Lempira, símbolo `L` (`formatMoney` en
@@ -74,15 +78,20 @@ Moneda: Lempira, símbolo `L` (`formatMoney` en
 
 ## Estado del MVP (orden de construcción, visual primero)
 
-1. ✅ Login (Supabase Auth) + Clientes + Panel con 4 KPIs (Total prestado,
-   Por cobrar, En mora, Cobrado hoy).
+1. ✅ Login (Supabase Auth) + Clientes + Panel con 6 KPIs (clientes y préstamos
+   activos, total prestado, por cobrar, en mora y cobrado hoy).
 2. ✅ Listar/crear/ver préstamo + generar tabla de cuotas. Interés **fijo total**:
    se aplica una sola vez al capital; las cuotas se distribuyen en centavos y
    suman exactamente el saldo inicial.
 3. ✅ Configuración inicial del prestamista + ficha extendida y estado de
    clientes + número legible y primera fecha de pago del préstamo.
-4. ⬜ Registrar pagos parciales/completos + actualizar saldo, cuotas y estado.
-5. ⬜ Comprobante de pago + reportes de cartera (morosidad, cobros por período).
+4. ✅ Registrar pagos parciales/completos + actualizar atómicamente saldo,
+   cuotas, vencimientos y estado.
+5. ✅ Comprobante térmico/PDF/WhatsApp + historial + reportes de cartera,
+   morosidad y cobros por período + exportación compatible con Excel.
+
+La mora diaria monetaria y los tipos de interés periódicos siguen aplazados;
+el MVP usa interés fijo total y solo marca mora por calendario.
 
 ## Recibos / impresión
 

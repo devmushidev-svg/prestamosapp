@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Building2, ChevronDown, FilePlus2, HandCoins, Home, LogOut, Menu, Settings2, User, Users, Wallet, X } from "lucide-react";
+import { Banknote, BarChart3, Building2, ChevronDown, FileClock, FilePlus2, HandCoins, Home, LogOut, Menu, Settings2, User, Users, Wallet, X } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { useBusinessConfig } from "../business/BusinessConfigContext";
@@ -38,6 +38,14 @@ const RIBBON: Record<TabId, RibbonGroupDef[]> = {
     {
       title: "Clientes",
       items: [{ to: "/clientes", label: "Clientes", icon: Users }],
+    },
+    {
+      title: "Cobros",
+      items: [
+        { to: "/pagos", label: "Pagos", icon: FileClock, end: true },
+        { to: "/pagos/nuevo", label: "Registrar pago", icon: Banknote },
+        { to: "/reportes", label: "Reportes", icon: BarChart3 },
+      ],
     },
   ],
   empresa: [

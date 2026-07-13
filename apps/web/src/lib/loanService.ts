@@ -41,7 +41,15 @@ function normalizeLoan(row: RawLoanWithCustomer): PrestamoConCliente {
 }
 
 function normalizeInstallment(row: Cuota): Cuota {
-  return { ...row, numero: Number(row.numero), monto: Number(row.monto) };
+  const amount = Number(row.monto);
+  return {
+    ...row,
+    numero: Number(row.numero),
+    monto: amount,
+    // Compatibilidad con el esquema inicial: una cuota que ya figuraba pagada
+    // equivale a tener todo su monto aplicado aunque la columna aún no existiera.
+    monto_pagado: Number(row.monto_pagado ?? (row.estado === "pagada" ? amount : 0)),
+  };
 }
 
 export async function listCustomersForLoan(): Promise<ClienteResumen[]> {
