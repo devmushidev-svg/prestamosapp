@@ -33,3 +33,14 @@ export function formatTimeOnly(d: string | Date): string {
     timeZone: HONDURAS_TIME_ZONE,
   });
 }
+
+export function formatLoanNumber(numero: number | null, id?: string): string {
+  if (numero != null && Number.isFinite(numero)) return `PRE-${String(numero).padStart(6, "0")}`;
+  return id ? `PRE-${id.slice(0, 8).toUpperCase()}` : "PRE-PENDIENTE";
+}
+
+export function formatPaymentNumber(numero: number | null, recibo?: string | null): string {
+  if (recibo?.trim()) return recibo.trim();
+  if (numero != null && Number.isFinite(numero)) return `REC-${String(numero).padStart(6, "0")}`;
+  return "REC-PENDIENTE";
+}

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { ChevronDown, Home, LogOut, Menu, User, Users, Wallet, X } from "lucide-react";
+import { Banknote, BarChart3, Building2, ChevronDown, FileClock, FilePlus2, HandCoins, Home, LogOut, Menu, Settings2, User, Users, Wallet, X } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { BrandLockup, BrandLogo } from "../components/BrandLogo";
 import { Button } from "../components/ui";
 
@@ -13,13 +14,14 @@ type NavItem = {
   end?: boolean;
 };
 
-type TabId = "inicio" | "cartera";
+type TabId = "inicio" | "cartera" | "empresa";
 
 type RibbonGroupDef = { title: string; items: NavItem[] };
 
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: "inicio", label: "Inicio", icon: Home },
   { id: "cartera", label: "Cartera", icon: Wallet },
+  { id: "empresa", label: "Empresa", icon: Building2 },
 ];
 
 /** Cinta agrupada (estilo ERP). Las fichas de préstamos, pagos y reportes se agregan aquí conforme avanza el MVP. */
@@ -27,19 +29,43 @@ const RIBBON: Record<TabId, RibbonGroupDef[]> = {
   inicio: [],
   cartera: [
     {
+      title: "Préstamos",
+      items: [
+        { to: "/prestamos", label: "Préstamos", icon: HandCoins, end: true },
+        { to: "/prestamos/nuevo", label: "Nuevo préstamo", icon: FilePlus2 },
+      ],
+    },
+    {
       title: "Clientes",
       items: [{ to: "/clientes", label: "Clientes", icon: Users }],
+    },
+    {
+      title: "Cobros",
+      items: [
+        { to: "/pagos", label: "Pagos", icon: FileClock, end: true },
+        { to: "/pagos/nuevo", label: "Registrar pago", icon: Banknote },
+        { to: "/reportes", label: "Reportes", icon: BarChart3 },
+      ],
+    },
+  ],
+  empresa: [
+    {
+      title: "Negocio",
+      items: [{ to: "/configuracion", label: "Datos del prestamista", icon: Settings2 }],
     },
   ],
 };
 
 const TAB_DEFAULT_PATH: Record<TabId, string> = {
   inicio: "/",
-  cartera: "/clientes",
+  cartera: "/prestamos",
+  empresa: "/configuracion",
 };
 
 function tabFromPath(pathname: string): TabId {
-  return pathname === "/" ? "inicio" : "cartera";
+  if (pathname === "/") return "inicio";
+  if (/^\/configuracion(\/|$)/.test(pathname)) return "empresa";
+  return "cartera";
 }
 
 const MOBILE_QUICK_ITEMS: NavItem[] = [
@@ -118,6 +144,7 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
   const [openSections, setOpenSections] = useState<Record<TabId, boolean>>(() => ({
     inicio: false,
     cartera: activeSection === "cartera",
+    empresa: activeSection === "empresa",
   }));
 
   return (
@@ -200,6 +227,7 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
 
 export function AppShell({ children }: { children?: ReactNode }) {
   const { user, logout } = useAuth();
+  const { config } = useBusinessConfig();
   const location = useLocation();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -278,7 +306,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
         <div className="flex min-w-0 items-center gap-3">
           <BrandLogo size={40} withShadow className="ring-2 ring-white/80 shadow-lg shadow-[var(--pf-shadow-btn-soft)]" />
           <div className="min-w-0">
-            <p className="truncate text-sm font-bold tracking-tight text-pf-text">MultiPréstamos</p>
+            <p className="truncate text-sm font-bold tracking-tight text-pf-text">{config?.nombre_negocio || "MultiPréstamos"}</p>
             <p className="truncate text-xs font-medium text-pf-text-tertiary">Gestión de préstamos</p>
           </div>
         </div>

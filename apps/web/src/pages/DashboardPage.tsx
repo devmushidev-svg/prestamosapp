@@ -1,11 +1,13 @@
-import { AlertTriangle, ArrowRight, HandCoins, Landmark, TrendingUp, Users } from "lucide-react";
+import { AlertTriangle, ArrowRight, Banknote, BarChart3, FilePlus2, HandCoins, Landmark, TrendingUp, Users, WalletCards } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { BrandLogo } from "../components/BrandLogo";
 import { Button, Card } from "../components/ui";
 import { formatMoney } from "../lib/format";
 import { supabase } from "../lib/supabase";
+import { refreshPortfolioStatuses } from "../lib/paymentService";
 
 const SYM = "L";
 
@@ -54,6 +56,7 @@ function KpiCard({
 }
 
 type Kpis = {
+  clientesActivos: number;
   totalPrestado: number;
   prestamosCount: number;
   porCobrar: number;
@@ -66,6 +69,7 @@ type Kpis = {
 
 export function DashboardPage() {
   const { user } = useAuth();
+  const { config } = useBusinessConfig();
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [err, setErr] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
@@ -73,21 +77,33 @@ export function DashboardPage() {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const hoy = new Date();
-      const inicioHoy = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate()).toISOString();
-      const inicioManana = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() + 1).toISOString();
-      const [pr, pa] = await Promise.all([
+      setErr("");
+      setKpis(null);
+      await refreshPortfolioStatuses();
+      const fechaHonduras = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Tegucigalpa",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+      const inicioHoyMs = new Date(`${fechaHonduras}T00:00:00-06:00`).getTime();
+      const inicioHoy = new Date(inicioHoyMs).toISOString();
+      const inicioManana = new Date(inicioHoyMs + 24 * 60 * 60 * 1000).toISOString();
+      const [pr, pa, cl] = await Promise.all([
         supabase.from("prestamos").select("monto,saldo,estado"),
         supabase.from("pagos").select("monto").gte("fecha", inicioHoy).lt("fecha", inicioManana),
+        supabase.from("clientes").select("*"),
       ]);
       if (pr.error) throw new Error(pr.error.message);
       if (pa.error) throw new Error(pa.error.message);
+      if (cl.error) throw new Error(cl.error.message);
       // ponytail: agregados en el cliente; pasar a una vista SQL cuando la cartera pase de unos miles de préstamos
       const vivos = pr.data.filter((p) => p.estado !== "cancelado");
       const conSaldo = vivos.filter((p) => p.estado === "activo" || p.estado === "al_dia" || p.estado === "en_mora");
       const mora = vivos.filter((p) => p.estado === "en_mora");
       if (cancelled) return;
       setKpis({
+        clientesActivos: cl.data.filter((customer) => !customer.estado || customer.estado === "activo").length,
         totalPrestado: vivos.reduce((s, p) => s + Number(p.monto), 0),
         prestamosCount: vivos.length,
         porCobrar: conSaldo.reduce((s, p) => s + Number(p.saldo), 0),
@@ -117,8 +133,12 @@ export function DashboardPage() {
               <BrandLogo size={40} withShadow className="opacity-90" />
             </div>
             <div className="min-w-0">
-              <h1 className="text-lg font-extrabold tracking-tight text-pf-text md:text-xl">MultiPréstamos</h1>
-              <p className="text-sm text-pf-text-tertiary">Cartera de préstamos</p>
+              <h1 className="text-lg font-extrabold tracking-tight text-pf-text md:text-xl">
+                {config?.nombre_negocio || "MultiPréstamos"}
+              </h1>
+              <p className="text-sm text-pf-text-tertiary">
+                {config?.nombre_propietario || "Cartera de préstamos"}
+              </p>
               <p className="mt-0.5 text-xs text-pf-muted">{user?.email}</p>
             </div>
           </div>
@@ -135,13 +155,30 @@ export function DashboardPage() {
       ) : kpis === null ? (
         <Card className="pf-glass-card-panel p-8 text-center text-sm text-pf-muted">Cargando…</Card>
       ) : (
-        <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 xl:grid-cols-3">
+          <KpiCard
+            label="Clientes activos"
+            value={String(kpis.clientesActivos)}
+            sub="Fichas habilitadas"
+            icon={Users}
+            accent="primary"
+            to="/clientes"
+          />
+          <KpiCard
+            label="Préstamos activos"
+            value={String(kpis.conSaldoCount)}
+            sub="Con saldo pendiente"
+            icon={WalletCards}
+            accent="info"
+            to="/prestamos"
+          />
           <KpiCard
             label="Total prestado"
             value={formatMoney(SYM, kpis.totalPrestado)}
             sub={`${kpis.prestamosCount} préstamo${kpis.prestamosCount !== 1 ? "s" : ""}`}
             icon={HandCoins}
             accent="primary"
+            to="/prestamos"
           />
           <KpiCard
             label="Por cobrar"
@@ -149,6 +186,7 @@ export function DashboardPage() {
             sub={`${kpis.conSaldoCount} con saldo`}
             icon={Landmark}
             accent="info"
+            to="/prestamos"
           />
           <KpiCard
             label="En mora"
@@ -156,6 +194,7 @@ export function DashboardPage() {
             sub={`${kpis.moraCount} préstamo${kpis.moraCount !== 1 ? "s" : ""}`}
             icon={AlertTriangle}
             accent={kpis.moraCount > 0 ? "danger" : "success"}
+            to="/prestamos"
           />
           <KpiCard
             label="Cobrado hoy"
@@ -163,15 +202,22 @@ export function DashboardPage() {
             sub={`${kpis.pagosHoyCount} pago${kpis.pagosHoyCount !== 1 ? "s" : ""}`}
             icon={TrendingUp}
             accent="success"
+            to="/pagos"
           />
         </div>
       )}
 
-      {/* Acceso rápido — se agregan Nuevo préstamo / Pagos / Reportes conforme avanza el MVP */}
+      {/* Acceso rápido */}
       <div>
         <p className="mb-3 text-xs font-bold uppercase tracking-widest text-pf-muted">Acceso rápido</p>
-        <div className="grid max-w-sm grid-cols-1 gap-2">
-          {[{ to: "/clientes", label: "Clientes", icon: Users, primary: true }].map(
+        <div className="grid max-w-5xl grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          {[
+            { to: "/prestamos/nuevo", label: "Nuevo préstamo", icon: FilePlus2, primary: true },
+            { to: "/pagos/nuevo", label: "Registrar pago", icon: Banknote, primary: false },
+            { to: "/prestamos", label: "Préstamos", icon: WalletCards, primary: false },
+            { to: "/clientes", label: "Clientes", icon: Users, primary: false },
+            { to: "/reportes", label: "Reportes", icon: BarChart3, primary: false },
+          ].map(
             ({ to, label, icon: Icon, primary }) => (
               <Link
                 key={to}

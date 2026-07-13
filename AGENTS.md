@@ -25,8 +25,11 @@
   users to sign up**; ocultar el registro en la interfaz no bloquea el endpoint
   público de Supabase.
 - **Esquema de la base:** [`supabase/schema.sql`](supabase/schema.sql) — se pega
-  una vez en el SQL Editor de Supabase. Tablas: `clientes`, `prestamos`,
-  `cuotas`, `pagos`, todas con RLS “solo autenticados”.
+  en el SQL Editor de Supabase y se vuelve a ejecutar cuando cambie. Tablas:
+  `configuracion_prestamista`, `clientes`, `prestamos`, `cuotas`, `pagos` y
+  `pago_aplicaciones`, todas con RLS “solo autenticados”. Incluye las funciones
+  transaccionales `crear_prestamo_con_cuotas`, `registrar_pago` y
+  `actualizar_estados_cartera`.
 
 > El backend original (Hono + Prisma + SQLite, `apps/api`) fue **eliminado**:
 > no servía para Vercel (serverless, SQLite no persiste). Si necesitas ver cómo
@@ -54,13 +57,20 @@
 
 ## Modelo de datos (Supabase, español)
 
-- **clientes**: nombre, identidad (DNI), telefono, direccion, notas.
-- **prestamos**: cliente_id, monto (capital), tasa_interes, plazo (nº cuotas),
-  frecuencia (semanal/quincenal/mensual), fecha_inicio, saldo,
+- **configuracion_prestamista**: ficha singleton del negocio; nombre, propietario,
+  RTN, teléfono y dirección. Su ausencia activa la configuración inicial.
+- **clientes**: nombre, identidad (DNI), teléfono, dirección, lugar_trabajo,
+  referencias, estado (activo/moroso/cancelado), notas.
+- **prestamos**: numero legible, cliente_id, monto (capital), tasa_interes, plazo
+  (nº cuotas), frecuencia (semanal/quincenal/mensual), fecha_inicio,
+  fecha_primer_pago, saldo,
   estado (activo/al_dia/en_mora/pagado/cancelado).
-- **cuotas**: prestamo_id, numero, fecha_vencimiento, monto,
+- **cuotas**: prestamo_id, numero, fecha_vencimiento, monto, monto_pagado,
   estado (pendiente/pagada/vencida).
-- **pagos**: prestamo_id, cuota_id, fecha, monto, recibo (nº comprobante).
+- **pagos**: una fila por cobro/recibo; solicitud idempotente, número de recibo,
+  fecha, monto, saldos anterior/posterior y snapshot inmutable del comprobante.
+- **pago_aplicaciones**: reparto de cada pago entre una o varias cuotas; permite
+  pagos parciales sin duplicar recibos.
 
 Tipos TypeScript en [`apps/web/src/types.ts`](apps/web/src/types.ts).
 Moneda: Lempira, símbolo `L` (`formatMoney` en
@@ -68,12 +78,20 @@ Moneda: Lempira, símbolo `L` (`formatMoney` en
 
 ## Estado del MVP (orden de construcción, visual primero)
 
-1. ✅ Login (Supabase Auth) + Clientes + Panel con 4 KPIs (Total prestado,
-   Por cobrar, En mora, Cobrado hoy).
-2. ⬜ Crear préstamo + generar tabla de cuotas. **El método de interés (fijo vs.
-   amortización francesa) lo decide el usuario — preguntar antes de implementar.**
-3. ⬜ Registrar pagos + actualizar saldo y estado del préstamo.
-4. ⬜ Comprobante de pago + reportes de cartera (morosidad, cobros por período).
+1. ✅ Login (Supabase Auth) + Clientes + Panel con 6 KPIs (clientes y préstamos
+   activos, total prestado, por cobrar, en mora y cobrado hoy).
+2. ✅ Listar/crear/ver préstamo + generar tabla de cuotas. Interés **fijo total**:
+   se aplica una sola vez al capital; las cuotas se distribuyen en centavos y
+   suman exactamente el saldo inicial.
+3. ✅ Configuración inicial del prestamista + ficha extendida y estado de
+   clientes + número legible y primera fecha de pago del préstamo.
+4. ✅ Registrar pagos parciales/completos + actualizar atómicamente saldo,
+   cuotas, vencimientos y estado.
+5. ✅ Comprobante térmico/PDF/WhatsApp + historial + reportes de cartera,
+   morosidad y cobros por período + exportación compatible con Excel.
+
+La mora diaria monetaria y los tipos de interés periódicos siguen aplazados;
+el MVP usa interés fijo total y solo marca mora por calendario.
 
 ## Recibos / impresión
 
@@ -94,8 +112,9 @@ npm install        # en la raíz
 npm run dev        # web en http://localhost:5173 (datos van directo a Supabase)
 ```
 
-Requisitos una sola vez: ejecutar `supabase/schema.sql` en el SQL Editor de
-Supabase y crear un usuario en Authentication → Users.
+Requisitos: ejecutar o volver a ejecutar `supabase/schema.sql` en el SQL Editor
+de Supabase después de cambios del esquema, y crear un usuario en
+Authentication → Users.
 
 ## Despliegue (Vercel)
 
