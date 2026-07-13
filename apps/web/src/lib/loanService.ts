@@ -1,8 +1,10 @@
 import { calculateFixedLoan, type FixedLoanCalculation, type FixedLoanInput } from "./loanCalculator";
 import { supabase } from "./supabase";
-import type { Cliente, Cuota, Prestamo } from "../types";
+import type { Cliente, Cuota, EstadoCliente, Prestamo } from "../types";
 
-export type ClienteResumen = Pick<Cliente, "id" | "nombre" | "identidad" | "telefono" | "direccion">;
+export type ClienteResumen = Pick<Cliente, "id" | "nombre" | "identidad" | "telefono" | "direccion"> & {
+  estado?: EstadoCliente;
+};
 
 export type PrestamoConCliente = Prestamo & {
   cliente: ClienteResumen | null;
@@ -22,12 +24,14 @@ function normalizeLoan(row: RawLoanWithCustomer): PrestamoConCliente {
   const relatedCustomer = Array.isArray(row.clientes) ? row.clientes[0] ?? null : row.clientes;
   return {
     id: row.id,
+    numero: row.numero == null ? null : Number(row.numero),
     cliente_id: row.cliente_id,
     monto: Number(row.monto),
     tasa_interes: Number(row.tasa_interes),
     plazo: Number(row.plazo),
     frecuencia: row.frecuencia,
     fecha_inicio: row.fecha_inicio,
+    fecha_primer_pago: row.fecha_primer_pago ?? null,
     saldo: Number(row.saldo),
     estado: row.estado,
     solicitud_id: row.solicitud_id ?? null,
@@ -41,12 +45,17 @@ function normalizeInstallment(row: Cuota): Cuota {
 }
 
 export async function listCustomersForLoan(): Promise<ClienteResumen[]> {
-  const { data, error } = await supabase
+  const current = await supabase
     .from("clientes")
-    .select("id,nombre,identidad,telefono,direccion")
+    .select("id,nombre,identidad,telefono,direccion,estado")
+    .neq("estado", "cancelado")
     .order("nombre");
-  if (error) throw error;
-  return (data ?? []) as ClienteResumen[];
+  if (!current.error) return (current.data ?? []) as ClienteResumen[];
+  const missingStatus = current.error.code === "PGRST204" || current.error.code === "42703" || current.error.message.includes("estado");
+  if (!missingStatus) throw current.error;
+  const legacy = await supabase.from("clientes").select("id,nombre,identidad,telefono,direccion").order("nombre");
+  if (legacy.error) throw legacy.error;
+  return (legacy.data ?? []) as ClienteResumen[];
 }
 
 export async function listLoans(): Promise<PrestamoConCliente[]> {

@@ -26,7 +26,7 @@
   público de Supabase.
 - **Esquema de la base:** [`supabase/schema.sql`](supabase/schema.sql) — se pega
   en el SQL Editor de Supabase y se vuelve a ejecutar cuando cambie. Tablas:
-  `clientes`, `prestamos`, `cuotas`, `pagos`, todas con RLS “solo
+  `configuracion_prestamista`, `clientes`, `prestamos`, `cuotas`, `pagos`, todas con RLS “solo
   autenticados”. Incluye la función transaccional
   `crear_prestamo_con_cuotas`.
 
@@ -56,9 +56,13 @@
 
 ## Modelo de datos (Supabase, español)
 
-- **clientes**: nombre, identidad (DNI), telefono, direccion, notas.
-- **prestamos**: cliente_id, monto (capital), tasa_interes, plazo (nº cuotas),
-  frecuencia (semanal/quincenal/mensual), fecha_inicio, saldo,
+- **configuracion_prestamista**: ficha singleton del negocio; nombre, propietario,
+  RTN, teléfono y dirección. Su ausencia activa la configuración inicial.
+- **clientes**: nombre, identidad (DNI), teléfono, dirección, lugar_trabajo,
+  referencias, estado (activo/moroso/cancelado), notas.
+- **prestamos**: numero legible, cliente_id, monto (capital), tasa_interes, plazo
+  (nº cuotas), frecuencia (semanal/quincenal/mensual), fecha_inicio,
+  fecha_primer_pago, saldo,
   estado (activo/al_dia/en_mora/pagado/cancelado).
 - **cuotas**: prestamo_id, numero, fecha_vencimiento, monto,
   estado (pendiente/pagada/vencida).
@@ -75,8 +79,10 @@ Moneda: Lempira, símbolo `L` (`formatMoney` en
 2. ✅ Listar/crear/ver préstamo + generar tabla de cuotas. Interés **fijo total**:
    se aplica una sola vez al capital; las cuotas se distribuyen en centavos y
    suman exactamente el saldo inicial.
-3. ⬜ Registrar pagos + actualizar saldo y estado del préstamo.
-4. ⬜ Comprobante de pago + reportes de cartera (morosidad, cobros por período).
+3. ✅ Configuración inicial del prestamista + ficha extendida y estado de
+   clientes + número legible y primera fecha de pago del préstamo.
+4. ⬜ Registrar pagos parciales/completos + actualizar saldo, cuotas y estado.
+5. ⬜ Comprobante de pago + reportes de cartera (morosidad, cobros por período).
 
 ## Recibos / impresión
 

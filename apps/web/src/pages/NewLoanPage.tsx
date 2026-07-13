@@ -1,6 +1,6 @@
 import { ArrowLeft, CalendarClock, FilePlus2, HandCoins, Percent, UserPlus, WalletCards } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { InstallmentSchedule } from "../components/InstallmentSchedule";
 import { PageHero } from "../components/PageHero";
 import { Button, Card, EmptyState, Field, Input, Select } from "../components/ui";
@@ -52,6 +52,7 @@ function getCalculation(form: LoanForm): FixedLoanCalculation | null {
 
 export function NewLoanPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [customers, setCustomers] = useState<ClienteResumen[]>([]);
   const [customersLoading, setCustomersLoading] = useState(true);
   const [customersError, setCustomersError] = useState("");
@@ -75,6 +76,12 @@ export function NewLoanPage() {
   useEffect(() => {
     void loadCustomers();
   }, [loadCustomers]);
+
+  useEffect(() => {
+    const requestedCustomer = searchParams.get("clienteId");
+    if (!requestedCustomer || !customers.some((customer) => customer.id === requestedCustomer)) return;
+    setForm((current) => current.clienteId ? current : { ...current, clienteId: requestedCustomer });
+  }, [customers, searchParams]);
 
   const calculation = useMemo(() => getCalculation(form), [form]);
   const selectedCustomer = customers.find((customer) => customer.id === form.clienteId) ?? null;

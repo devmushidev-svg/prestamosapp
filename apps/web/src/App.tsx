@@ -1,6 +1,7 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
+import { RequireBusinessConfig } from "./business/RequireBusinessConfig";
 import { AppShell } from "./layouts/AppShell";
 import { LoginPage } from "./pages/LoginPage";
 
@@ -9,6 +10,8 @@ const CustomersPage = lazy(() => import("./pages/CustomersPage").then((m) => ({ 
 const LoansPage = lazy(() => import("./pages/LoansPage").then((m) => ({ default: m.LoansPage })));
 const NewLoanPage = lazy(() => import("./pages/NewLoanPage").then((m) => ({ default: m.NewLoanPage })));
 const LoanDetailPage = lazy(() => import("./pages/LoanDetailPage").then((m) => ({ default: m.LoanDetailPage })));
+const BusinessSetupPage = lazy(() => import("./pages/BusinessConfigPage").then((m) => ({ default: m.BusinessSetupPage })));
+const BusinessSettingsPage = lazy(() => import("./pages/BusinessConfigPage").then((m) => ({ default: m.BusinessSettingsPage })));
 
 function RouteFallback() {
   return (
@@ -36,12 +39,24 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route
-        path="/"
+        path="/configuracion/inicial"
         element={
           <Protected>
             <Suspense fallback={<RouteFallback />}>
-              <AppShell />
+              <BusinessSetupPage />
             </Suspense>
+          </Protected>
+        }
+      />
+      <Route
+        path="/"
+        element={
+          <Protected>
+            <RequireBusinessConfig>
+              <Suspense fallback={<RouteFallback />}>
+                <AppShell />
+              </Suspense>
+            </RequireBusinessConfig>
           </Protected>
         }
       >
@@ -50,6 +65,7 @@ export default function App() {
         <Route path="prestamos" element={<LoansPage />} />
         <Route path="prestamos/nuevo" element={<NewLoanPage />} />
         <Route path="prestamos/:loanId" element={<LoanDetailPage />} />
+        <Route path="configuracion" element={<BusinessSettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

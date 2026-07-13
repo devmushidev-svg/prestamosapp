@@ -6,7 +6,7 @@ import { InstallmentSchedule } from "../components/InstallmentSchedule";
 import { LoanStatusBadge } from "../components/LoanStatusBadge";
 import { PageHero } from "../components/PageHero";
 import { Button, Card, EmptyState } from "../components/ui";
-import { formatDateOnly, formatMoney } from "../lib/format";
+import { formatDateOnly, formatLoanNumber, formatMoney } from "../lib/format";
 import { FREQUENCY_LABELS } from "../lib/loanCalculator";
 import { getLoanDetail, type PrestamoDetalle } from "../lib/loanService";
 
@@ -112,7 +112,7 @@ export function LoanDetailPage() {
       >
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <LoanStatusBadge status={loan.estado} />
-          <span className="font-mono text-xs text-pf-muted">Código {loan.id.slice(0, 8)}</span>
+          <span className="font-mono text-xs font-bold text-pf-muted">{formatLoanNumber(loan.numero, loan.id)}</span>
         </div>
       </PageHero>
 
@@ -187,6 +187,13 @@ export function LoanDetailPage() {
               <dd className="mt-0.5 flex items-center gap-1.5 font-bold text-pf-text">
                 <CalendarDays className="h-4 w-4 text-pf-muted" strokeWidth={2} aria-hidden />
                 {formatDateOnly(loan.fecha_inicio)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-pf-muted">Primer pago</dt>
+              <dd className="mt-0.5 flex items-center gap-1.5 font-bold text-pf-text">
+                <CalendarDays className="h-4 w-4 text-pf-muted" strokeWidth={2} aria-hidden />
+                {formatDateOnly(loan.fecha_primer_pago ?? loan.cuotas[0]?.fecha_vencimiento ?? loan.fecha_inicio)}
               </dd>
             </div>
           </dl>

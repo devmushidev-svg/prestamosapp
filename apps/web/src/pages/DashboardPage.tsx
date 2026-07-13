@@ -2,6 +2,7 @@ import { AlertTriangle, ArrowRight, FilePlus2, HandCoins, Landmark, TrendingUp, 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { BrandLogo } from "../components/BrandLogo";
 import { Button, Card } from "../components/ui";
 import { formatMoney } from "../lib/format";
@@ -66,6 +67,7 @@ type Kpis = {
 
 export function DashboardPage() {
   const { user } = useAuth();
+  const { config } = useBusinessConfig();
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [err, setErr] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
@@ -117,8 +119,12 @@ export function DashboardPage() {
               <BrandLogo size={40} withShadow className="opacity-90" />
             </div>
             <div className="min-w-0">
-              <h1 className="text-lg font-extrabold tracking-tight text-pf-text md:text-xl">MultiPréstamos</h1>
-              <p className="text-sm text-pf-text-tertiary">Cartera de préstamos</p>
+              <h1 className="text-lg font-extrabold tracking-tight text-pf-text md:text-xl">
+                {config?.nombre_negocio || "MultiPréstamos"}
+              </h1>
+              <p className="text-sm text-pf-text-tertiary">
+                {config?.nombre_propietario || "Cartera de préstamos"}
+              </p>
               <p className="mt-0.5 text-xs text-pf-muted">{user?.email}</p>
             </div>
           </div>

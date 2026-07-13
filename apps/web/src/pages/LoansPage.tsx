@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { LoanStatusBadge } from "../components/LoanStatusBadge";
 import { PageHero } from "../components/PageHero";
 import { Button, Card, EmptyState, Field, Input, PaginationBar, Select } from "../components/ui";
-import { formatDateOnly, formatMoney } from "../lib/format";
+import { formatDateOnly, formatLoanNumber, formatMoney } from "../lib/format";
 import { FREQUENCY_LABELS } from "../lib/loanCalculator";
 import { listLoans, type PrestamoConCliente } from "../lib/loanService";
 import type { EstadoPrestamo } from "../types";
@@ -54,7 +54,7 @@ export function LoansPage() {
     return loans.filter((loan) => {
       if (status && loan.estado !== status) return false;
       if (!term) return true;
-      return [loan.cliente?.nombre, loan.cliente?.identidad, loan.cliente?.telefono, loan.id.slice(0, 8)]
+      return [loan.cliente?.nombre, loan.cliente?.identidad, loan.cliente?.telefono, formatLoanNumber(loan.numero, loan.id)]
         .filter(Boolean)
         .some((value) => String(value).toLocaleLowerCase("es-HN").includes(term));
     });
@@ -176,6 +176,7 @@ export function LoansPage() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-bold text-pf-text">{loan.cliente?.nombre ?? "Cliente no disponible"}</p>
+                    <p className="mt-0.5 font-mono text-[11px] font-bold text-pf-primary-hover">{formatLoanNumber(loan.numero, loan.id)}</p>
                     <p className="mt-1 flex items-center gap-1.5 text-xs text-pf-muted">
                       <CalendarDays className="h-3.5 w-3.5 shrink-0" strokeWidth={2} aria-hidden />
                       Inicio {formatDateOnly(loan.fecha_inicio)}
@@ -231,7 +232,7 @@ export function LoansPage() {
                           <UserRound className="h-4 w-4 shrink-0 text-pf-muted" strokeWidth={2} aria-hidden />
                           <span className="max-w-[210px] truncate">{loan.cliente?.nombre ?? "Cliente no disponible"}</span>
                         </p>
-                        <p className="mt-0.5 pl-6 font-mono text-[11px] text-pf-muted">{loan.id.slice(0, 8)}</p>
+                        <p className="mt-0.5 pl-6 font-mono text-[11px] text-pf-muted">{formatLoanNumber(loan.numero, loan.id)}</p>
                       </td>
                       <td className="p-3 whitespace-nowrap text-pf-text-secondary">{formatDateOnly(loan.fecha_inicio)}</td>
                       <td className="p-3 whitespace-nowrap text-right font-medium tabular-nums">{formatMoney("L", loan.monto)}</td>
