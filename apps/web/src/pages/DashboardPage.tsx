@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, Banknote, BarChart3, FilePlus2, HandCoins, Landmark, TrendingUp, Users, WalletCards } from "lucide-react";
+import { AlertTriangle, ArrowRight, Banknote, BarChart3, CheckCircle2, FilePlus2, HandCoins, Landmark, TrendingUp, Users, WalletCards } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
@@ -27,31 +27,90 @@ function KpiCard({
   to?: string;
 }) {
   const accentMap = {
-    primary: "from-pf-primary-soft/70 to-pf-surface-elevated border-pf-primary-soft text-pf-primary-hover",
-    info: "from-pf-info-soft/70 to-pf-surface-elevated border-pf-info-soft text-pf-info",
-    warning: "from-pf-warning-soft/70 to-pf-surface-elevated border-pf-warning-soft text-pf-warning",
-    success: "from-pf-success-soft/70 to-pf-surface-elevated border-pf-success-soft text-pf-success",
-    danger: "from-pf-danger-soft/70 to-pf-surface-elevated border-pf-danger-soft text-pf-danger",
+    primary: {
+      surface: "border-pf-primary-soft from-pf-surface-elevated via-pf-surface-elevated to-pf-primary-soft/55",
+      bar: "from-pf-primary via-pf-primary-mid to-pf-primary-hover",
+      halo: "bg-pf-primary-soft/70",
+      chip: "border-pf-primary-soft bg-pf-primary-soft/75 text-pf-primary-hover",
+      arrow: "border-pf-primary-soft bg-pf-primary-soft/65 text-pf-primary-hover",
+    },
+    info: {
+      surface: "border-pf-info-soft from-pf-surface-elevated via-pf-surface-elevated to-pf-info-soft/55",
+      bar: "from-pf-info/65 via-pf-info to-pf-info/75",
+      halo: "bg-pf-info-soft/70",
+      chip: "border-pf-info-soft bg-pf-info-soft/75 text-pf-info",
+      arrow: "border-pf-info-soft bg-pf-info-soft/65 text-pf-info",
+    },
+    warning: {
+      surface: "border-pf-warning-soft from-pf-surface-elevated via-pf-surface-elevated to-pf-warning-soft/55",
+      bar: "from-pf-warning/65 via-pf-warning to-pf-warning/75",
+      halo: "bg-pf-warning-soft/70",
+      chip: "border-pf-warning-soft bg-pf-warning-soft/75 text-pf-warning",
+      arrow: "border-pf-warning-soft bg-pf-warning-soft/65 text-pf-warning",
+    },
+    success: {
+      surface: "border-pf-success-soft from-pf-surface-elevated via-pf-surface-elevated to-pf-success-soft/55",
+      bar: "from-pf-success/65 via-pf-success to-pf-success/75",
+      halo: "bg-pf-success-soft/70",
+      chip: "border-pf-success-soft bg-pf-success-soft/75 text-pf-success",
+      arrow: "border-pf-success-soft bg-pf-success-soft/65 text-pf-success",
+    },
+    danger: {
+      surface: "border-pf-danger-soft from-pf-surface-elevated via-pf-surface-elevated to-pf-danger-soft/55",
+      bar: "from-pf-danger/65 via-pf-danger to-pf-danger/75",
+      halo: "bg-pf-danger-soft/70",
+      chip: "border-pf-danger-soft bg-pf-danger-soft/75 text-pf-danger",
+      arrow: "border-pf-danger-soft bg-pf-danger-soft/65 text-pf-danger",
+    },
   };
+  const style = accentMap[accent];
 
   const content = (
     <div
-      className={`flex items-start gap-3 rounded-xl border bg-gradient-to-br p-4 shadow-sm transition hover:shadow-md ${accentMap[accent]}`}
+      className={`relative h-full min-h-[118px] overflow-hidden rounded-2xl border bg-gradient-to-br p-3.5 pt-4 shadow-[var(--pf-shadow-warm-md)] transition duration-200 motion-safe:active:scale-[0.985] motion-safe:hover:-translate-y-0.5 motion-reduce:transition-none hover:shadow-lg sm:p-4 sm:pt-[1.125rem] ${style.surface}`}
     >
-      {/* En móvil el espacio es para la cifra; el icono vuelve en ≥sm. */}
-      <div className="hidden h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-pf-surface-elevated/80 shadow-sm sm:flex">
-        <Icon className="h-5 w-5" strokeWidth={1.8} />
+      <div className={`absolute inset-x-3 top-0 h-[3px] rounded-b-full bg-gradient-to-r sm:inset-x-4 ${style.bar}`} aria-hidden />
+      <div className={`pointer-events-none absolute -right-7 -top-8 h-24 w-24 rounded-full opacity-60 blur-2xl ${style.halo}`} aria-hidden />
+
+      <div className="relative flex h-full min-w-0 flex-col">
+        <div className="flex min-h-8 items-center justify-between gap-2">
+          <p className="text-[10px] font-extrabold uppercase leading-[1.15] tracking-[0.09em] text-pf-muted sm:text-[11px]">
+            {label}
+          </p>
+          <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border shadow-sm sm:h-9 sm:w-9 ${style.chip}`} aria-hidden>
+            <Icon className="h-4 w-4 sm:h-[1.125rem] sm:w-[1.125rem]" strokeWidth={1.9} />
+          </div>
+        </div>
+
+        <p
+          className="mt-2 truncate text-[clamp(1.05rem,4.8vw,1.5rem)] font-black leading-none tracking-[-0.035em] tabular-nums text-pf-text"
+          title={value}
+        >
+          {value}
+        </p>
+
+        <div className="mt-auto flex min-w-0 items-end justify-between gap-1 pt-2">
+          {sub ? <p className="min-w-0 truncate text-[11px] font-medium leading-tight text-pf-text-tertiary sm:text-xs">{sub}</p> : <span />}
+          {to ? (
+            <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-transform duration-200 motion-safe:group-hover:translate-x-0.5 motion-reduce:transition-none sm:h-6 sm:w-6 ${style.arrow}`} aria-hidden>
+              <ArrowRight className="h-3 w-3 sm:h-3.5 sm:w-3.5" strokeWidth={2.2} />
+            </span>
+          ) : null}
+        </div>
       </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-[11px] font-bold uppercase tracking-wider text-pf-muted">{label}</p>
-        <p className="mt-0.5 whitespace-nowrap text-sm font-extrabold tracking-tight tabular-nums text-pf-text sm:text-lg">{value}</p>
-        {sub && <p className="mt-0.5 text-xs text-pf-text-tertiary">{sub}</p>}
-      </div>
-      {to && <ArrowRight className="mt-2.5 hidden h-4 w-4 shrink-0 text-pf-muted sm:block" strokeWidth={2} />}
     </div>
   );
 
-  if (to) return <Link to={to} className="block">{content}</Link>;
+  if (to) {
+    return (
+      <Link
+        to={to}
+        className="group block h-full rounded-2xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pf-primary-hover"
+      >
+        {content}
+      </Link>
+    );
+  }
   return content;
 }
 
@@ -192,7 +251,7 @@ export function DashboardPage() {
             label="En mora"
             value={formatMoney(SYM, kpis.enMora)}
             sub={`${kpis.moraCount} préstamo${kpis.moraCount !== 1 ? "s" : ""}`}
-            icon={AlertTriangle}
+            icon={kpis.moraCount > 0 ? AlertTriangle : CheckCircle2}
             accent={kpis.moraCount > 0 ? "danger" : "success"}
             to="/prestamos"
           />
