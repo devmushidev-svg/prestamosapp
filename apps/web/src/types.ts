@@ -31,7 +31,8 @@ export type ConfiguracionPrestamistaInput = Pick<
   "nombre_negocio" | "nombre_propietario" | "rtn" | "direccion" | "telefono"
 >;
 
-export type FrecuenciaPago = "semanal" | "quincenal" | "mensual";
+export type FrecuenciaPago = "diario" | "semanal" | "quincenal" | "mensual";
+export type DiaPagoSemana = 1 | 2 | 3 | 4 | 5 | 6;
 export type EstadoPrestamo = "activo" | "al_dia" | "en_mora" | "pagado" | "cancelado";
 export type EstadoCuota = "pendiente" | "pagada" | "vencida";
 
@@ -47,6 +48,9 @@ export type Prestamo = {
   fecha_inicio: string;
   /** Solo puede ser null mientras la base aún usa el esquema anterior. */
   fecha_primer_pago: string | null;
+  dia_pago_semana: DiaPagoSemana | null;
+  /** Condición pactada; el recargo monetario todavía no se suma automáticamente al saldo. */
+  tasa_mora: number;
   saldo: number;
   estado: EstadoPrestamo;
   solicitud_id: string | null;
@@ -89,6 +93,8 @@ export type ReciboSnapshot = {
   monto: number;
   saldoAnterior: number | null;
   saldoRestante: number | null;
+  estadoCredito?: EstadoPrestamo;
+  tasaMora?: number;
   negocio: {
     nombre: string;
     propietario?: string | null;

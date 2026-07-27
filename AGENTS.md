@@ -62,8 +62,8 @@
 - **clientes**: nombre, identidad (DNI), teléfono, dirección, lugar_trabajo,
   referencias, estado (activo/moroso/cancelado), notas.
 - **prestamos**: numero legible, cliente_id, monto (capital), tasa_interes, plazo
-  (nº cuotas), frecuencia (semanal/quincenal/mensual), fecha_inicio,
-  fecha_primer_pago, saldo,
+  (nº cuotas), frecuencia (diario/semanal/quincenal/mensual), fecha_inicio,
+  fecha_primer_pago, dia_pago_semana, tasa_mora y saldo,
   estado (activo/al_dia/en_mora/pagado/cancelado).
 - **cuotas**: prestamo_id, numero, fecha_vencimiento, monto, monto_pagado,
   estado (pendiente/pagada/vencida).
@@ -89,9 +89,14 @@ Moneda: Lempira, símbolo `L` (`formatMoney` en
    cuotas, vencimientos y estado.
 5. ✅ Comprobante térmico/PDF/WhatsApp + historial + reportes de cartera,
    morosidad y cobros por período + exportación compatible con Excel.
+6. ✅ Planes comerciales: diario 24/40 días, semanal 3/6/9/12 meses y
+   quincenal 9/12 meses. El semanal guarda un día fijo de lunes a sábado;
+   los préstamos mensuales anteriores siguen siendo compatibles.
 
-La mora diaria monetaria y los tipos de interés periódicos siguen aplazados;
-el MVP usa interés fijo total y solo marca mora por calendario.
+El porcentaje de mora de 1.5 % queda guardado como condición en los préstamos
+nuevos, pero todavía no se agrega automáticamente al saldo. Falta confirmar la
+prioridad de aplicación entre mora, interés y capital. El MVP mantiene interés
+fijo total y marca mora por calendario.
 
 ## Recibos / impresión
 

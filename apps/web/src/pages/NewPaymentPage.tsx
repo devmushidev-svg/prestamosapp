@@ -12,7 +12,7 @@ import {
   registerPayment,
   type PaymentContext,
 } from "../lib/paymentService";
-import { FREQUENCY_LABELS } from "../lib/loanCalculator";
+import { formatLoanPlan } from "../lib/loanCalculator";
 import type { PrestamoConCliente } from "../lib/loanService";
 
 const NUMBER_INPUT_CLASS =
@@ -298,7 +298,7 @@ export function NewPaymentPage() {
                     const selected = loan.id === loanId;
                     return (
                       <button key={loan.id} type="button" aria-pressed={selected} className={`w-full rounded-xl border p-3 text-left transition ${loanId && !selected ? "max-md:hidden" : ""} ${selected ? "border-pf-primary bg-pf-primary-soft/35 shadow-sm" : "border-pf-border-soft bg-pf-surface-elevated hover:bg-pf-surface-soft"}`} onClick={() => selectLoan(loan.id)}>
-                        <span className="flex items-start justify-between gap-3"><span><strong className="block font-mono text-xs text-pf-primary-hover">{formatLoanNumber(loan.numero, loan.id)}</strong><span className="mt-1 block text-xs text-pf-muted">{loan.plazo} cuotas · {FREQUENCY_LABELS[loan.frecuencia]}</span></span><LoanStatusBadge status={loan.estado} /></span>
+                        <span className="flex items-start justify-between gap-3"><span><strong className="block font-mono text-xs text-pf-primary-hover">{formatLoanNumber(loan.numero, loan.id)}</strong><span className="mt-1 block text-xs text-pf-muted">{formatLoanPlan(loan.frecuencia, loan.plazo)}</span></span><LoanStatusBadge status={loan.estado} /></span>
                         <span className="mt-3 flex items-end justify-between gap-3 border-t border-pf-border-soft pt-2.5"><span className="text-xs text-pf-muted">{selected && nextInstallment ? `Próxima cuota ${formatDateOnly(nextInstallment.fecha_vencimiento)}` : "Saldo pendiente"}</span><strong className="whitespace-nowrap text-lg tabular-nums text-pf-text">{formatMoney("L", loan.saldo)}</strong></span>
                       </button>
                     );

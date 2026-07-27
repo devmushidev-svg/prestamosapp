@@ -23,7 +23,7 @@ import { LoanStatusBadge } from "../components/LoanStatusBadge";
 import { PageHero } from "../components/PageHero";
 import { Button, Card, EmptyState } from "../components/ui";
 import { formatDate, formatDateOnly, formatLoanNumber, formatMoney, formatPaymentNumber } from "../lib/format";
-import { FREQUENCY_LABELS } from "../lib/loanCalculator";
+import { formatLoanPlan, FREQUENCY_LABELS, WEEKDAY_LABELS } from "../lib/loanCalculator";
 import { getLoanDetail, type PrestamoDetalle } from "../lib/loanService";
 import { listPayments, refreshPortfolioStatuses, type PaymentSummary } from "../lib/paymentService";
 
@@ -298,6 +298,10 @@ export function LoanDetailPage() {
             </div>
           </div>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+            <div className="col-span-2 rounded-xl bg-pf-surface-soft p-3">
+              <dt className="text-xs text-pf-muted">Plan comercial</dt>
+              <dd className="mt-0.5 font-bold text-pf-text">{formatLoanPlan(loan.frecuencia, loan.plazo)}</dd>
+            </div>
             <div>
               <dt className="text-xs text-pf-muted">Tasa total</dt>
               <dd className="mt-0.5 font-bold text-pf-text">{loan.tasa_interes}%</dd>
@@ -309,6 +313,16 @@ export function LoanDetailPage() {
             <div>
               <dt className="text-xs text-pf-muted">Número de cuotas</dt>
               <dd className="mt-0.5 font-bold text-pf-text">{loan.plazo}</dd>
+            </div>
+            {loan.frecuencia === "semanal" && loan.dia_pago_semana ? (
+              <div>
+                <dt className="text-xs text-pf-muted">Día fijo de cobro</dt>
+                <dd className="mt-0.5 font-bold text-pf-text">{WEEKDAY_LABELS[loan.dia_pago_semana]}</dd>
+              </div>
+            ) : null}
+            <div>
+              <dt className="text-xs text-pf-muted">Mora configurada</dt>
+              <dd className="mt-0.5 font-bold text-pf-text">{loan.tasa_mora}%</dd>
             </div>
             <div>
               <dt className="text-xs text-pf-muted">Fecha de inicio</dt>
