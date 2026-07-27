@@ -1,4 +1,4 @@
-import type { FrecuenciaPago } from "../types";
+import type { DiaPagoSemana, FrecuenciaPago } from "../types";
 
 const HONDURAS_TIME_ZONE = "America/Tegucigalpa";
 const RATE_SCALE = 10_000n;
@@ -6,10 +6,76 @@ const MAX_INSTALLMENTS = 600;
 const MAX_DATABASE_CENTS = 99_999_999_999_999n;
 
 export const FREQUENCY_LABELS: Record<FrecuenciaPago, string> = {
+  diario: "Diario",
   semanal: "Semanal",
   quincenal: "Quincenal",
   mensual: "Mensual",
 };
+
+export const NEW_LOAN_FREQUENCIES = ["diario", "semanal", "quincenal"] as const;
+export type NewLoanFrequency = (typeof NEW_LOAN_FREQUENCIES)[number];
+
+export const WEEKDAY_LABELS: Record<DiaPagoSemana, string> = {
+  1: "Lunes",
+  2: "Martes",
+  3: "Miércoles",
+  4: "Jueves",
+  5: "Viernes",
+  6: "Sábado",
+};
+
+export type LoanTermOption = {
+  plazo: number;
+  label: string;
+  detail: string;
+};
+
+const TERM_OPTIONS: Record<NewLoanFrequency, LoanTermOption[]> = {
+  diario: [
+    { plazo: 24, label: "24 días", detail: "24 pagos diarios" },
+    { plazo: 40, label: "40 días", detail: "40 pagos diarios" },
+  ],
+  semanal: [
+    { plazo: 12, label: "3 meses", detail: "12 pagos semanales" },
+    { plazo: 24, label: "6 meses", detail: "24 pagos semanales" },
+    { plazo: 36, label: "9 meses", detail: "36 pagos semanales" },
+    { plazo: 48, label: "12 meses", detail: "48 pagos semanales" },
+  ],
+  quincenal: [
+    { plazo: 18, label: "9 meses", detail: "18 pagos quincenales" },
+    { plazo: 24, label: "12 meses", detail: "24 pagos quincenales" },
+  ],
+};
+
+const DAILY_RATE_OPTIONS: Record<number, number[]> = {
+  24: [15, 20],
+  40: [30, 40],
+};
+
+export function getLoanTermOptions(frequency: NewLoanFrequency): LoanTermOption[] {
+  return TERM_OPTIONS[frequency];
+}
+
+export function getDailyRateOptions(plazo: number): number[] {
+  return DAILY_RATE_OPTIONS[plazo] ?? [];
+}
+
+export function formatLoanPlan(frequency: FrecuenciaPago, plazo: number): string {
+  if (frequency === "diario") return `${plazo} días · ${plazo} pagos diarios`;
+  if (frequency === "semanal") {
+    const months = plazo / 4;
+    return Number.isInteger(months)
+      ? `${months} meses · ${plazo} pagos semanales`
+      : `${plazo} pagos semanales`;
+  }
+  if (frequency === "quincenal") {
+    const months = plazo / 2;
+    return Number.isInteger(months)
+      ? `${months} meses · ${plazo} pagos quincenales`
+      : `${plazo} pagos quincenales`;
+  }
+  return `${plazo} pagos mensuales`;
+}
 
 export type CalculatedInstallment = {
   numero: number;
@@ -22,6 +88,7 @@ export type FixedLoanCalculation = {
   tasaInteres: number;
   interes: number;
   totalPagar: number;
+  fechaPrimerPago: string;
   cuotas: CalculatedInstallment[];
 };
 
@@ -31,6 +98,7 @@ export type FixedLoanInput = {
   plazo: number;
   frecuencia: FrecuenciaPago;
   fechaInicio: string;
+  diaPagoSemana?: DiaPagoSemana | null;
 };
 
 type CivilDateParts = { year: number; month: number; day: number };
@@ -75,10 +143,68 @@ function addMonthsClamped(value: string, months: number): string {
   return formatCivilDate({ year, month: monthZeroBased + 1, day: Math.min(start.day, lastDay) });
 }
 
-function dueDate(fechaInicio: string, frecuencia: FrecuenciaPago, numero: number): string {
-  if (frecuencia === "semanal") return addDays(fechaInicio, numero * 7);
-  if (frecuencia === "quincenal") return addDays(fechaInicio, numero * 15);
-  return addMonthsClamped(fechaInicio, numero);
+function isoWeekday(value: string): number {
+  const { year, month, day } = parseCivilDate(value);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  return weekday === 0 ? 7 : weekday;
+}
+
+export function getDefaultWeeklyPaymentDay(fechaInicio: string): DiaPagoSemana {
+  const weekday = isoWeekday(fechaInicio);
+  return weekday >= 1 && weekday <= 6 ? weekday as DiaPagoSemana : 1;
+}
+
+export function getFirstPaymentDate(
+  fechaInicio: string,
+  frecuencia: FrecuenciaPago,
+  diaPagoSemana?: DiaPagoSemana | null
+): string {
+  parseCivilDate(fechaInicio);
+  if (frecuencia === "diario") return addDays(fechaInicio, 1);
+  if (frecuencia === "quincenal") return addDays(fechaInicio, 15);
+  if (frecuencia === "mensual") return addMonthsClamped(fechaInicio, 1);
+  if (!diaPagoSemana || diaPagoSemana < 1 || diaPagoSemana > 6) {
+    throw new Error("Seleccione un día de cobro entre lunes y sábado.");
+  }
+  const startWeekday = isoWeekday(fechaInicio);
+  const rawDelta = (diaPagoSemana - startWeekday + 7) % 7;
+  return addDays(fechaInicio, rawDelta === 0 ? 7 : rawDelta);
+}
+
+function dueDate(input: FixedLoanInput, numero: number): string {
+  if (input.frecuencia === "mensual") return addMonthsClamped(input.fechaInicio, numero);
+  const firstPayment = getFirstPaymentDate(input.fechaInicio, input.frecuencia, input.diaPagoSemana);
+  if (input.frecuencia === "diario") return addDays(firstPayment, numero - 1);
+  if (input.frecuencia === "semanal") return addDays(firstPayment, (numero - 1) * 7);
+  return addDays(firstPayment, (numero - 1) * 15);
+}
+
+function validateCommercialPlan(input: FixedLoanInput, normalizedRate: number) {
+  if (input.frecuencia === "diario") {
+    if (![24, 40].includes(input.plazo)) {
+      throw new Error("El cobro diario solo permite planes de 24 o 40 días.");
+    }
+    if (!getDailyRateOptions(input.plazo).includes(normalizedRate)) {
+      throw new Error(`Para ${input.plazo} días seleccione una tasa permitida.`);
+    }
+    if (input.diaPagoSemana != null) throw new Error("El plan diario no utiliza un día semanal.");
+    return;
+  }
+  if (input.frecuencia === "semanal") {
+    if (![12, 24, 36, 48].includes(input.plazo)) {
+      throw new Error("El cobro semanal solo permite planes de 3, 6, 9 o 12 meses.");
+    }
+    if (!input.diaPagoSemana || input.diaPagoSemana < 1 || input.diaPagoSemana > 6) {
+      throw new Error("Seleccione un día de cobro entre lunes y sábado.");
+    }
+    return;
+  }
+  if (input.frecuencia === "quincenal") {
+    if (![18, 24].includes(input.plazo)) {
+      throw new Error("El cobro quincenal solo permite planes de 9 o 12 meses.");
+    }
+    if (input.diaPagoSemana != null) throw new Error("El plan quincenal no utiliza un día semanal.");
+  }
 }
 
 function toScaledInteger(value: number, scale: number, label: string): bigint {
@@ -118,6 +244,7 @@ export function calculateFixedLoan(input: FixedLoanInput): FixedLoanCalculation 
   }
   const capitalCents = toScaledInteger(input.capital, 100, "El capital");
   const rateHundredths = toScaledInteger(input.tasaInteres, 100, "La tasa de interés");
+  const normalizedRate = Number(rateHundredths) / 100;
 
   if (capitalCents > MAX_DATABASE_CENTS) throw new Error("El capital es demasiado alto.");
   if (rateHundredths > 999_999n) throw new Error("La tasa de interés es demasiado alta.");
@@ -125,6 +252,7 @@ export function calculateFixedLoan(input: FixedLoanInput): FixedLoanCalculation 
     throw new Error(`El plazo debe estar entre 1 y ${MAX_INSTALLMENTS} cuotas.`);
   }
   parseCivilDate(input.fechaInicio);
+  validateCommercialPlan(input, normalizedRate);
 
   const interestCents = (capitalCents * rateHundredths + RATE_SCALE / 2n) / RATE_SCALE;
   const totalCents = capitalCents + interestCents;
@@ -139,16 +267,17 @@ export function calculateFixedLoan(input: FixedLoanInput): FixedLoanCalculation 
     const amountCents = baseCents + (BigInt(numero) <= remainder ? 1n : 0n);
     return {
       numero,
-      fechaVencimiento: dueDate(input.fechaInicio, input.frecuencia, numero),
+      fechaVencimiento: dueDate(input, numero),
       monto: centsToNumber(amountCents),
     };
   });
 
   return {
     capital: centsToNumber(capitalCents),
-    tasaInteres: Number(rateHundredths) / 100,
+    tasaInteres: normalizedRate,
     interes: centsToNumber(interestCents),
     totalPagar: centsToNumber(totalCents),
+    fechaPrimerPago: cuotas[0].fechaVencimiento,
     cuotas,
   };
 }

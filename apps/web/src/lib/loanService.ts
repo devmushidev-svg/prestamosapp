@@ -1,6 +1,6 @@
 import { calculateFixedLoan, type FixedLoanCalculation, type FixedLoanInput } from "./loanCalculator";
 import { supabase } from "./supabase";
-import type { Cliente, Cuota, EstadoCliente, Prestamo } from "../types";
+import type { Cliente, Cuota, DiaPagoSemana, EstadoCliente, Prestamo } from "../types";
 
 export type ClienteResumen = Pick<Cliente, "id" | "nombre" | "identidad" | "telefono" | "direccion"> & {
   estado?: EstadoCliente;
@@ -32,6 +32,8 @@ function normalizeLoan(row: RawLoanWithCustomer): PrestamoConCliente {
     frecuencia: row.frecuencia,
     fecha_inicio: row.fecha_inicio,
     fecha_primer_pago: row.fecha_primer_pago ?? null,
+    dia_pago_semana: row.dia_pago_semana == null ? null : Number(row.dia_pago_semana) as DiaPagoSemana,
+    tasa_mora: Number(row.tasa_mora ?? 0),
     saldo: Number(row.saldo),
     estado: row.estado,
     solicitud_id: row.solicitud_id ?? null,
@@ -104,11 +106,12 @@ export async function createFixedLoan(
     p_plazo: input.plazo,
     p_frecuencia: input.frecuencia,
     p_fecha_inicio: input.fechaInicio,
+    p_dia_pago_semana: input.frecuencia === "semanal" ? input.diaPagoSemana ?? null : null,
   });
 
   if (!error && typeof data === "string") return { id: data, calculation };
   if (error && isMissingCreateLoanRpc(error)) {
-    throw new Error("Falta aplicar la actualización de préstamos en Supabase.");
+    throw new Error("Falta aplicar la actualización de planes comerciales en Supabase.");
   }
   if (error) throw error;
   throw new Error("Supabase devolvió una respuesta inesperada. No se reintentó para evitar duplicados.");

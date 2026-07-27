@@ -34,12 +34,31 @@ function receiptDate(value: string) {
   });
 }
 
+const CREDIT_STATUS_LABELS: Record<NonNullable<DatosRecibo["estadoCredito"]>, string> = {
+  activo: "Activo",
+  al_dia: "Al día",
+  en_mora: "En mora",
+  pagado: "Pagado",
+  cancelado: "Cancelado",
+};
+
+export function getCreditStatusLabel(status: DatosRecibo["estadoCredito"]) {
+  return status ? CREDIT_STATUS_LABELS[status] ?? "No disponible" : "No disponible";
+}
+
+export function formatReceiptRate(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(Number(value))) return null;
+  return `${Number(value).toLocaleString("es-HN", { maximumFractionDigits: 2 })}%`;
+}
+
 function receiptHtml(data: DatosRecibo) {
   const applications = data.aplicaciones
     .map(
       (item) => `<div class="row"><span>Cuota #${escapeHtml(item.numeroCuota)}</span><strong>${escapeHtml(money(item.monto))}</strong></div>`
     )
     .join("");
+  const creditStatus = getCreditStatusLabel(data.estadoCredito);
+  const lateFeeRate = formatReceiptRate(data.tasaMora);
   return `<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><title>${escapeHtml(data.numeroRecibo)}</title>
 <style>
@@ -69,11 +88,13 @@ function receiptHtml(data: DatosRecibo) {
   <div class="row"><span>Cliente</span><strong>${escapeHtml(data.clienteNombre)}</strong></div>
   ${data.clienteIdentidad ? `<div class="row"><span>DNI</span><strong>${escapeHtml(data.clienteIdentidad)}</strong></div>` : ""}
   <div class="row"><span>Préstamo</span><strong>${escapeHtml(data.numeroPrestamo)}</strong></div>
-  <div class="rule"></div><p class="center">Monto recibido</p><p class="amount">${escapeHtml(money(data.monto))}</p><div class="rule"></div>
+  <div class="row"><span>Situación del crédito</span><strong>${escapeHtml(creditStatus)}</strong></div>
+  ${lateFeeRate ? `<div class="row"><span>Mora pactada</span><strong>${escapeHtml(lateFeeRate)}</strong></div>` : ""}
+  <div class="rule"></div><p class="center">PAGO</p><p class="amount">${escapeHtml(money(data.monto))}</p><div class="rule"></div>
   ${applications}
   <div class="rule"></div>
   <div class="row"><span>Saldo anterior</span><strong>${escapeHtml(money(data.saldoAnterior))}</strong></div>
-  <div class="row"><span>Saldo restante</span><strong>${escapeHtml(money(data.saldoRestante))}</strong></div>
+  <div class="row"><span>Saldo a pagar</span><strong>${escapeHtml(money(data.saldoRestante))}</strong></div>
   <footer class="foot">
     ${data.negocio.propietario ? `<p>Atendido por</p><p><strong>${escapeHtml(data.negocio.propietario)}</strong></p>` : ""}
     <p style="margin-top:10px">Gracias por su pago</p>
@@ -241,8 +262,11 @@ function layoutReceiptImage(context: CanvasRenderingContext2D, data: DatosRecibo
   row("Cliente", data.clienteNombre);
   if (data.clienteIdentidad) row("DNI", data.clienteIdentidad);
   row("Préstamo", data.numeroPrestamo);
+  row("Situación del crédito", getCreditStatusLabel(data.estadoCredito), true);
+  const lateFeeRate = formatReceiptRate(data.tasaMora);
+  if (lateFeeRate) row("Mora pactada", lateFeeRate);
   divider();
-  centered("MONTO RECIBIDO", 25, 700, 36, "#6b7280");
+  centered("PAGO", 25, 700, 36, "#6b7280");
   y += 8;
   centered(money(data.monto), 66, 900, 80, "#0c0a09");
   y += 10;
@@ -258,7 +282,7 @@ function layoutReceiptImage(context: CanvasRenderingContext2D, data: DatosRecibo
   }
   divider();
   row("Saldo anterior", money(data.saldoAnterior));
-  row("Saldo restante", money(data.saldoRestante), true);
+  row("Saldo a pagar", money(data.saldoRestante), true);
   y += 34;
   if (data.negocio.propietario) {
     centered("Atendido por", 25, 500, 34, "#6b7280");
@@ -311,14 +335,18 @@ export async function prepararReciboPng(data: DatosRecibo): Promise<File> {
 }
 
 function receiptShareText(data: DatosRecibo) {
-  return [
+  const lines = [
     `${data.negocio.nombre} — ${data.numeroRecibo}`,
     `Cliente: ${data.clienteNombre}`,
+    `Situación del crédito: ${getCreditStatusLabel(data.estadoCredito)}`,
     `Pago: ${money(data.monto)}`,
-    `Saldo restante: ${money(data.saldoRestante)}`,
+    `Saldo a pagar: ${money(data.saldoRestante)}`,
     `Préstamo: ${data.numeroPrestamo}`,
     `Fecha: ${receiptDate(data.fecha)}`,
-  ].join("\n");
+  ];
+  const lateFeeRate = formatReceiptRate(data.tasaMora);
+  if (lateFeeRate) lines.splice(3, 0, `Mora pactada: ${lateFeeRate}`);
+  return lines.join("\n");
 }
 
 function openWhatsAppText(data: DatosRecibo) {

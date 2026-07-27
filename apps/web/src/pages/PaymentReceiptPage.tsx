@@ -8,6 +8,8 @@ import { getPaymentDetail, type PaymentDetail } from "../lib/paymentService";
 import {
   compartirReciboWhatsApp,
   emitirRecibo,
+  formatReceiptRate,
+  getCreditStatusLabel,
   prepararReciboPng,
   type DatosRecibo,
 } from "../lib/receiptService";
@@ -59,6 +61,7 @@ export function PaymentReceiptPage() {
   const receiptData = useMemo<DatosRecibo | null>(() => {
     if (!detail) return null;
     if (detail.pago.datos_recibo) return detail.pago.datos_recibo;
+    const estadoCredito = detail.pago.saldo_posterior === 0 ? "pagado" : undefined;
     return {
       version: 1,
       numeroRecibo: formatPaymentNumber(detail.pago.numero_recibo, detail.pago.recibo),
@@ -69,6 +72,8 @@ export function PaymentReceiptPage() {
       monto: detail.pago.monto,
       saldoAnterior: detail.pago.saldo_anterior,
       saldoRestante: detail.pago.saldo_posterior,
+      estadoCredito,
+      tasaMora: undefined,
       negocio: {
         nombre: config?.nombre_negocio || "MultiPréstamos",
         propietario: config?.nombre_propietario,
@@ -152,12 +157,15 @@ export function PaymentReceiptPage() {
     );
   }
 
+  const creditStatus = getCreditStatusLabel(receiptData.estadoCredito);
+  const lateFeeRate = formatReceiptRate(receiptData.tasaMora);
+
   return (
     <div className="mx-auto max-w-md space-y-4 pf-safe-page print:max-w-none">
       {showCreated ? (
         <div className="rounded-xl border border-pf-success-soft bg-pf-success-soft/60 px-4 py-3 text-sm font-semibold text-pf-success" role="status">
           <p className="flex items-center gap-2"><CheckCircle2 className="h-5 w-5" strokeWidth={2} aria-hidden />Pago registrado correctamente</p>
-          <p className="mt-1 pl-7 text-xs font-medium">Nuevo saldo: {formatMoney("L", detail.pago.saldo_posterior ?? detail.prestamo.saldo)}</p>
+          <p className="mt-1 pl-7 text-xs font-medium">Saldo a pagar: {formatMoney("L", detail.pago.saldo_posterior ?? detail.prestamo.saldo)}</p>
         </div>
       ) : null}
 
@@ -199,8 +207,10 @@ export function PaymentReceiptPage() {
         <TicketRow label="Cliente">{receiptData.clienteNombre}</TicketRow>
         {receiptData.clienteIdentidad ? <TicketRow label="DNI">{receiptData.clienteIdentidad}</TicketRow> : null}
         <TicketRow label="Préstamo">{receiptData.numeroPrestamo}</TicketRow>
+        <TicketRow label="Situación del crédito" strong>{creditStatus}</TicketRow>
+        {lateFeeRate ? <TicketRow label="Mora pactada">{lateFeeRate}</TicketRow> : null}
         <div className="my-4 border-t border-dashed border-stone-400" />
-        <p className="text-center text-[10px] font-bold uppercase tracking-widest text-stone-500">Monto recibido</p>
+        <p className="text-center text-[10px] font-bold uppercase tracking-widest text-stone-500">Pago</p>
         <p className="mt-1 text-center text-3xl font-black tabular-nums">{formatMoney("L", receiptData.monto)}</p>
         <div className="my-4 border-t border-dashed border-stone-400" />
         {receiptData.aplicaciones.map((application, index) => (
@@ -208,7 +218,7 @@ export function PaymentReceiptPage() {
         ))}
         <div className="my-4 border-t border-dashed border-stone-400" />
         <TicketRow label="Saldo anterior">{receiptData.saldoAnterior == null ? "—" : formatMoney("L", receiptData.saldoAnterior)}</TicketRow>
-        <TicketRow label="Saldo restante" strong>{receiptData.saldoRestante == null ? "—" : formatMoney("L", receiptData.saldoRestante)}</TicketRow>
+        <TicketRow label="Saldo a pagar" strong>{receiptData.saldoRestante == null ? "—" : formatMoney("L", receiptData.saldoRestante)}</TicketRow>
         <footer className="mt-6 text-center text-xs">
           {receiptData.negocio.propietario ? <><p>Atendido por</p><p className="font-black">{receiptData.negocio.propietario}</p></> : null}
           <p className="mt-5">Gracias por su pago</p>

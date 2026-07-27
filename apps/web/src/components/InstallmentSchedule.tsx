@@ -39,18 +39,25 @@ function InstallmentBadge({ status = "pendiente", partial = false }: { status?: 
   );
 }
 
-export function InstallmentSchedule({ items }: { items: InstallmentScheduleItem[] }) {
+export function InstallmentSchedule({
+  items,
+  mobileLimit,
+}: {
+  items: InstallmentScheduleItem[];
+  mobileLimit?: number;
+}) {
   const normalizedItems = items.map((item) => {
     const defaultPaid = item.estado === "pagada" ? item.monto : 0;
     const paid = Math.min(item.monto, Math.max(0, item.montoPagado ?? defaultPaid));
     const pending = Math.max(0, item.monto - paid);
     return { ...item, paid, pending, partial: paid > 0 && pending > 0 };
   });
+  const mobileItems = mobileLimit ? normalizedItems.slice(0, mobileLimit) : normalizedItems;
 
   return (
     <>
       <div className="space-y-2 md:hidden">
-        {normalizedItems.map((item) => (
+        {mobileItems.map((item) => (
           <div
             key={item.numero}
             className="rounded-2xl border border-pf-border-soft bg-pf-surface-elevated p-3 shadow-sm"
@@ -78,6 +85,11 @@ export function InstallmentSchedule({ items }: { items: InstallmentScheduleItem[
             </div>
           </div>
         ))}
+        {mobileItems.length < normalizedItems.length ? (
+          <p className="rounded-xl border border-dashed border-pf-border p-3 text-center text-xs font-medium text-pf-muted">
+            Vista previa: primeras {mobileItems.length} de {normalizedItems.length} cuotas. El calendario completo se mostrará al guardar.
+          </p>
+        ) : null}
       </div>
 
       <div className="max-md:hidden max-h-[36rem] overflow-auto rounded-xl border border-pf-border-soft">

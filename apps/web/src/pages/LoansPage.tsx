@@ -5,7 +5,7 @@ import { LoanStatusBadge } from "../components/LoanStatusBadge";
 import { PageHero } from "../components/PageHero";
 import { Button, Card, EmptyState, Field, Input, PaginationBar, Select } from "../components/ui";
 import { formatDateOnly, formatLoanNumber, formatMoney } from "../lib/format";
-import { FREQUENCY_LABELS } from "../lib/loanCalculator";
+import { formatLoanPlan } from "../lib/loanCalculator";
 import { listLoans, type PrestamoConCliente } from "../lib/loanService";
 import type { EstadoPrestamo } from "../types";
 
@@ -195,7 +195,7 @@ export function LoansPage() {
                   </div>
                 </div>
                 <p className="text-xs font-medium text-pf-text-tertiary">
-                  {loan.plazo} cuotas · {FREQUENCY_LABELS[loan.frecuencia]} · {loan.tasa_interes}% fijo total
+                  {formatLoanPlan(loan.frecuencia, loan.plazo)} · {loan.tasa_interes}% fijo total
                 </p>
                 <Button type="button" variant="secondary" className="w-full" onClick={() => navigate(`/prestamos/${loan.id}`)}>
                   <Eye className="h-4 w-4" strokeWidth={2} aria-hidden />
@@ -237,7 +237,7 @@ export function LoansPage() {
                       <td className="p-3 whitespace-nowrap text-pf-text-secondary">{formatDateOnly(loan.fecha_inicio)}</td>
                       <td className="p-3 whitespace-nowrap text-right font-medium tabular-nums">{formatMoney("L", loan.monto)}</td>
                       <td className="p-3 whitespace-nowrap text-pf-text-secondary">
-                        {loan.plazo} · {FREQUENCY_LABELS[loan.frecuencia]}
+                        {formatLoanPlan(loan.frecuencia, loan.plazo)}
                       </td>
                       <td className="p-3 whitespace-nowrap text-right font-extrabold tabular-nums text-pf-text">
                         {formatMoney("L", loan.saldo)}

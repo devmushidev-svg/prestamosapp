@@ -7,29 +7,40 @@ import { Button, Card, EmptyState, Field, Input, Select } from "../components/ui
 import { formatDateOnly, formatMoney } from "../lib/format";
 import {
   calculateFixedLoan,
+  formatLoanPlan,
   FREQUENCY_LABELS,
+  getDailyRateOptions,
+  getDefaultWeeklyPaymentDay,
+  getLoanTermOptions,
   hondurasToday,
+  NEW_LOAN_FREQUENCIES,
+  WEEKDAY_LABELS,
   type FixedLoanCalculation,
+  type NewLoanFrequency,
 } from "../lib/loanCalculator";
 import { createFixedLoan, listCustomersForLoan, type ClienteResumen } from "../lib/loanService";
-import type { FrecuenciaPago } from "../types";
+import type { DiaPagoSemana } from "../types";
 
 type LoanForm = {
   clienteId: string;
   capital: string;
   tasaInteres: string;
   plazo: string;
-  frecuencia: FrecuenciaPago;
+  frecuencia: NewLoanFrequency;
   fechaInicio: string;
+  diaPagoSemana: DiaPagoSemana;
 };
+
+const INITIAL_DATE = hondurasToday();
 
 const INITIAL_FORM: LoanForm = {
   clienteId: "",
   capital: "",
-  tasaInteres: "10",
-  plazo: "12",
-  frecuencia: "mensual",
-  fechaInicio: hondurasToday(),
+  tasaInteres: "15",
+  plazo: "24",
+  frecuencia: "diario",
+  fechaInicio: INITIAL_DATE,
+  diaPagoSemana: getDefaultWeeklyPaymentDay(INITIAL_DATE),
 };
 
 const NUMBER_INPUT_CLASS =
@@ -44,6 +55,7 @@ function getCalculation(form: LoanForm): FixedLoanCalculation | null {
       plazo: Number(form.plazo),
       frecuencia: form.frecuencia,
       fechaInicio: form.fechaInicio,
+      diaPagoSemana: form.frecuencia === "semanal" ? form.diaPagoSemana : null,
     });
   } catch {
     return null;
@@ -60,6 +72,7 @@ export function NewLoanPage() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const requestIdRef = useRef(crypto.randomUUID());
+  const weeklyDayWasSelectedRef = useRef(false);
 
   const loadCustomers = useCallback(async () => {
     setCustomersLoading(true);
@@ -85,6 +98,39 @@ export function NewLoanPage() {
 
   const calculation = useMemo(() => getCalculation(form), [form]);
   const selectedCustomer = customers.find((customer) => customer.id === form.clienteId) ?? null;
+  const termOptions = getLoanTermOptions(form.frecuencia);
+  const dailyRateOptions = form.frecuencia === "diario" ? getDailyRateOptions(Number(form.plazo)) : [];
+  const planLabel = formatLoanPlan(form.frecuencia, Number(form.plazo));
+  const weeklyPaymentDay = form.frecuencia === "semanal" ? WEEKDAY_LABELS[form.diaPagoSemana] : null;
+
+  function changeFrequency(frequency: NewLoanFrequency) {
+    const firstTerm = getLoanTermOptions(frequency)[0];
+    weeklyDayWasSelectedRef.current = false;
+    setForm((current) => ({
+      ...current,
+      frecuencia: frequency,
+      plazo: String(firstTerm.plazo),
+      tasaInteres: frequency === "diario"
+        ? String(getDailyRateOptions(firstTerm.plazo)[0])
+        : current.frecuencia === "diario" ? "10" : current.tasaInteres,
+      diaPagoSemana: current.fechaInicio
+        ? getDefaultWeeklyPaymentDay(current.fechaInicio)
+        : current.diaPagoSemana,
+    }));
+  }
+
+  function changeTerm(plazo: number) {
+    setForm((current) => {
+      const allowedRates = current.frecuencia === "diario" ? getDailyRateOptions(plazo) : [];
+      return {
+        ...current,
+        plazo: String(plazo),
+        tasaInteres: allowedRates.length && !allowedRates.includes(Number(current.tasaInteres))
+          ? String(allowedRates[0])
+          : current.tasaInteres,
+      };
+    });
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -102,6 +148,7 @@ export function NewLoanPage() {
         plazo: Number(form.plazo),
         frecuencia: form.frecuencia,
         fechaInicio: form.fechaInicio,
+        diaPagoSemana: form.frecuencia === "semanal" ? form.diaPagoSemana : null,
       });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Revise los datos del préstamo.");
@@ -118,6 +165,7 @@ export function NewLoanPage() {
         plazo: Number(form.plazo),
         frecuencia: form.frecuencia,
         fechaInicio: form.fechaInicio,
+        diaPagoSemana: form.frecuencia === "semanal" ? form.diaPagoSemana : null,
       });
       navigate(`/prestamos/${result.id}`, { replace: true, state: { created: true } });
     } catch (cause) {
@@ -207,8 +255,34 @@ export function NewLoanPage() {
               </Select>
             </Field>
 
+            <Field label="Tipo de cobro *">
+              <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Tipo de cobro">
+                {NEW_LOAN_FREQUENCIES.map((frequency) => {
+                  const selected = form.frecuencia === frequency;
+                  const detail = frequency === "diario" ? "Cada día" : frequency === "semanal" ? "Día fijo" : "Cada 15 días";
+                  return (
+                    <button
+                      key={frequency}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      className={`min-h-[58px] rounded-xl border px-2 py-2 text-center text-xs font-bold transition active:scale-[0.98] ${
+                        selected
+                          ? "pf-btn-primary-gradient border-transparent"
+                          : "pf-btn-secondary border-pf-border-soft"
+                      }`}
+                      onClick={() => changeFrequency(frequency)}
+                    >
+                      <span className="block">{FREQUENCY_LABELS[frequency]}</span>
+                      <span className={`mt-0.5 block text-[10px] font-medium ${selected ? "text-white/80" : "text-pf-muted"}`}>{detail}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Capital (L) *" htmlFor="loan-capital">
+              <Field label="Monto a prestar (L) *" htmlFor="loan-capital">
                 <Input
                   id="loan-capital"
                   className={NUMBER_INPUT_CLASS}
@@ -223,6 +297,57 @@ export function NewLoanPage() {
                   required
                 />
               </Field>
+
+              <Field label="Tiempo *">
+                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Tiempo del préstamo">
+                  {termOptions.map((option) => {
+                    const selected = Number(form.plazo) === option.plazo;
+                    return (
+                      <button
+                        key={option.plazo}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        className={`min-h-[46px] rounded-xl border px-2 py-2 text-xs font-bold transition active:scale-[0.98] ${
+                          selected
+                            ? "border-pf-primary bg-pf-primary-soft text-pf-primary-hover shadow-sm"
+                            : "border-pf-border-soft bg-pf-surface-elevated text-pf-text-secondary hover:bg-pf-surface-soft"
+                        }`}
+                        onClick={() => changeTerm(option.plazo)}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Field>
+            </div>
+
+            {form.frecuencia === "diario" ? (
+              <Field label="Tasa según historial crediticio *">
+                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Tasa de interés fija">
+                  {dailyRateOptions.map((rate) => {
+                    const selected = Number(form.tasaInteres) === rate;
+                    return (
+                      <button
+                        key={rate}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        className={`min-h-[48px] rounded-xl border px-3 py-2 text-sm font-extrabold transition active:scale-[0.98] ${
+                          selected
+                            ? "border-pf-primary bg-pf-primary-soft text-pf-primary-hover shadow-sm"
+                            : "border-pf-border-soft bg-pf-surface-elevated text-pf-text-secondary hover:bg-pf-surface-soft"
+                        }`}
+                        onClick={() => setForm((current) => ({ ...current, tasaInteres: String(rate) }))}
+                      >
+                        {rate}%
+                      </button>
+                    );
+                  })}
+                </div>
+              </Field>
+            ) : (
               <Field label="Interés fijo total (%) *" htmlFor="loan-rate">
                 <Input
                   id="loan-rate"
@@ -237,41 +362,53 @@ export function NewLoanPage() {
                   required
                 />
               </Field>
-              <Field label="Número de cuotas *" htmlFor="loan-term">
-                <Input
-                  id="loan-term"
-                  className={NUMBER_INPUT_CLASS}
-                  type="number"
-                  inputMode="numeric"
-                  min="1"
-                  max="600"
-                  step="1"
-                  value={form.plazo}
-                  onChange={(event) => setForm((current) => ({ ...current, plazo: event.target.value }))}
-                  required
-                />
+            )}
+
+            {form.frecuencia === "semanal" ? (
+              <Field label="Día fijo de cobro *">
+                <div className="grid grid-cols-3 gap-2 sm:grid-cols-6" role="radiogroup" aria-label="Día fijo de cobro semanal">
+                  {(Object.entries(WEEKDAY_LABELS) as Array<[string, string]>).map(([value, label]) => {
+                    const day = Number(value) as DiaPagoSemana;
+                    const selected = form.diaPagoSemana === day;
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        className={`min-h-[44px] rounded-xl border px-2 py-2 text-xs font-bold transition active:scale-[0.98] ${
+                          selected
+                            ? "border-pf-info bg-pf-info-soft text-pf-info shadow-sm"
+                            : "border-pf-border-soft bg-pf-surface-elevated text-pf-text-secondary hover:bg-pf-surface-soft"
+                        }`}
+                        onClick={() => {
+                          weeklyDayWasSelectedRef.current = true;
+                          setForm((current) => ({ ...current, diaPagoSemana: day }));
+                        }}
+                      >
+                        {label.slice(0, 3)}
+                      </button>
+                    );
+                  })}
+                </div>
               </Field>
-              <Field label="Frecuencia *" htmlFor="loan-frequency">
-                <Select
-                  id="loan-frequency"
-                  value={form.frecuencia}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, frecuencia: event.target.value as FrecuenciaPago }))
-                  }
-                >
-                  {Object.entries(FREQUENCY_LABELS).map(([value, label]) => (
-                    <option key={value} value={value}>{label}</option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
+            ) : null}
 
             <Field label="Fecha de inicio / desembolso *" htmlFor="loan-start">
               <Input
                 id="loan-start"
                 type="date"
                 value={form.fechaInicio}
-                onChange={(event) => setForm((current) => ({ ...current, fechaInicio: event.target.value }))}
+                onChange={(event) => {
+                  const fechaInicio = event.target.value;
+                  setForm((current) => ({
+                    ...current,
+                    fechaInicio,
+                    diaPagoSemana: fechaInicio && current.frecuencia === "semanal" && !weeklyDayWasSelectedRef.current
+                      ? getDefaultWeeklyPaymentDay(fechaInicio)
+                      : current.diaPagoSemana,
+                  }));
+                }}
                 onClick={(event) => event.currentTarget.showPicker?.()}
                 required
               />
@@ -280,7 +417,11 @@ export function NewLoanPage() {
             <div className="rounded-xl border border-pf-info-soft bg-pf-info-soft/35 p-3 text-xs leading-relaxed text-pf-text-secondary">
               <p className="flex items-start gap-2">
                 <Percent className="mt-0.5 h-4 w-4 shrink-0 text-pf-info" strokeWidth={2} aria-hidden />
-                La tasa se calcula una vez sobre el capital. La primera cuota vence un período después de la fecha de inicio.
+                <span>
+                  La tasa se calcula una sola vez sobre el capital. Este plan genera <strong>{planLabel.toLowerCase()}</strong>
+                  {weeklyPaymentDay ? <> con cobro fijo los <strong>{weeklyPaymentDay.toLowerCase()}</strong></> : null}.
+                  {calculation ? <> El primer pago vence el <strong>{formatDateOnly(calculation.fechaPrimerPago)}</strong>.</> : null}
+                </span>
               </p>
             </div>
           </Card>
@@ -318,19 +459,32 @@ export function NewLoanPage() {
               <div className="space-y-2 rounded-xl bg-pf-surface-soft p-3 text-xs text-pf-text-secondary">
                 <p className="flex justify-between gap-3">
                   <span>Plan</span>
-                  <strong>{calculation.cuotas.length} cuotas · {FREQUENCY_LABELS[form.frecuencia]}</strong>
+                  <strong className="text-right">{formatLoanPlan(form.frecuencia, calculation.cuotas.length)}</strong>
                 </p>
+                {weeklyPaymentDay ? (
+                  <p className="flex justify-between gap-3">
+                    <span>Día de cobro</span>
+                    <strong>{weeklyPaymentDay}</strong>
+                  </p>
+                ) : null}
                 <p className="flex justify-between gap-3">
                   <span>Primera cuota</span>
                   <strong>{formatMoney("L", calculation.cuotas[0].monto)}</strong>
                 </p>
                 <p className="flex justify-between gap-3">
-                  <span>Primer vencimiento</span>
-                  <strong>{formatDateOnly(calculation.cuotas[0].fechaVencimiento)}</strong>
+                  <span>Primer pago</span>
+                  <strong>{formatDateOnly(calculation.fechaPrimerPago)}</strong>
                 </p>
                 <p className="flex justify-between gap-3">
                   <span>Última cuota</span>
                   <strong>{formatDateOnly(calculation.cuotas.at(-1)?.fechaVencimiento ?? form.fechaInicio)}</strong>
+                </p>
+                <p className="flex justify-between gap-3 border-t border-pf-border-soft pt-2">
+                  <span>Mora configurada</span>
+                  <strong>1.5 %</strong>
+                </p>
+                <p className="text-[11px] leading-relaxed text-pf-muted">
+                  Se guardará como condición del crédito. Por ahora no aumenta automáticamente el saldo.
                 </p>
               </div>
             ) : (
@@ -358,6 +512,7 @@ export function NewLoanPage() {
             </div>
             {calculation ? (
               <InstallmentSchedule
+                mobileLimit={8}
                 items={calculation.cuotas.map((cuota) => ({
                   numero: cuota.numero,
                   fechaVencimiento: cuota.fechaVencimiento,
