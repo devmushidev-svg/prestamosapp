@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Clock3,
   Eye,
+  FileText,
   HandCoins,
   Landmark,
   MapPin,
@@ -168,6 +169,12 @@ export function LoanDetailPage() {
               <ArrowLeft className="h-4 w-4" strokeWidth={2} aria-hidden />
               Volver
             </Button>
+            {loan.cliente ? (
+              <Button type="button" variant="secondary" onClick={() => navigate(`/clientes/${loan.cliente_id}/estado-cuenta`)}>
+                <FileText className="h-4 w-4" strokeWidth={2} aria-hidden />
+                Estado de cuenta
+              </Button>
+            ) : null}
             {acceptsPayments ? (
               <Button type="button" className="max-md:hidden" onClick={() => navigate(`/pagos/nuevo?prestamoId=${loan.id}`)}>
                 <Banknote className="h-4 w-4" strokeWidth={2} aria-hidden />

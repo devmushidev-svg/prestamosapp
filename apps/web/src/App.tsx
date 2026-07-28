@@ -16,6 +16,8 @@ const PaymentsPage = lazy(() => import("./pages/PaymentsPage").then((m) => ({ de
 const NewPaymentPage = lazy(() => import("./pages/NewPaymentPage").then((m) => ({ default: m.NewPaymentPage })));
 const PaymentReceiptPage = lazy(() => import("./pages/PaymentReceiptPage").then((m) => ({ default: m.PaymentReceiptPage })));
 const ReportsPage = lazy(() => import("./pages/ReportsPage").then((m) => ({ default: m.ReportsPage })));
+const AgendaPage = lazy(() => import("./pages/AgendaPage").then((m) => ({ default: m.AgendaPage })));
+const CustomerStatementPage = lazy(() => import("./pages/CustomerStatementPage").then((m) => ({ default: m.CustomerStatementPage })));
 
 function RouteFallback() {
   return (
@@ -66,6 +68,7 @@ export default function App() {
       >
         <Route index element={<DashboardPage />} />
         <Route path="clientes" element={<CustomersPage />} />
+        <Route path="clientes/:customerId/estado-cuenta" element={<CustomerStatementPage />} />
         <Route path="prestamos" element={<LoansPage />} />
         <Route path="prestamos/nuevo" element={<NewLoanPage />} />
         <Route path="prestamos/:loanId" element={<LoanDetailPage />} />
@@ -73,6 +76,7 @@ export default function App() {
         <Route path="pagos" element={<PaymentsPage />} />
         <Route path="pagos/nuevo" element={<NewPaymentPage />} />
         <Route path="pagos/:paymentId/recibo" element={<PaymentReceiptPage />} />
+        <Route path="agenda" element={<AgendaPage />} />
         <Route path="reportes" element={<ReportsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

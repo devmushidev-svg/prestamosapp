@@ -69,12 +69,20 @@ export async function listCustomersForLoan(): Promise<ClienteResumen[]> {
 }
 
 export async function listLoans(): Promise<PrestamoConCliente[]> {
-  const { data, error } = await supabase
-    .from("prestamos")
-    .select("*,clientes(id,nombre,identidad,telefono,direccion)")
-    .order("creado_en", { ascending: false });
-  if (error) throw error;
-  return ((data ?? []) as RawLoanWithCustomer[]).map(normalizeLoan);
+  const pageSize = 500;
+  const rows: RawLoanWithCustomer[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from("prestamos")
+      .select("*,clientes(id,nombre,identidad,telefono,direccion)")
+      .order("creado_en", { ascending: false })
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    const batch = (data ?? []) as RawLoanWithCustomer[];
+    rows.push(...batch);
+    if (batch.length < pageSize) return rows.map(normalizeLoan);
+  }
 }
 
 export async function getLoanDetail(id: string): Promise<PrestamoDetalle> {
