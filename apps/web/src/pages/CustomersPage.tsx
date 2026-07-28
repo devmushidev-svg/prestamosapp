@@ -1,4 +1,4 @@
-import { AlertTriangle, BriefcaseBusiness, FilePlus2, MapPin, Pencil, Phone, ReceiptText, Search, UserPlus, UserRound, Users } from "lucide-react";
+import { AlertTriangle, BriefcaseBusiness, FilePlus2, FileText, MapPin, Pencil, Phone, ReceiptText, Search, UserPlus, UserRound, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useBusinessConfig } from "../business/BusinessConfigContext";
@@ -115,6 +115,10 @@ export function CustomersPage() {
     navigate(`/prestamos/nuevo?clienteId=${encodeURIComponent(customer.id)}`);
   }
 
+  function viewStatement(customer: Cliente) {
+    navigate(`/clientes/${encodeURIComponent(customer.id)}/estado-cuenta`);
+  }
+
   return (
     <div className="space-y-4 pf-safe-page">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -189,6 +193,9 @@ export function CustomersPage() {
                   <Button type="button" variant="secondary" className="px-2" aria-label={`Editar cliente ${customer.nombre}`} onClick={() => openEdit(customer)}>
                     <Pencil className="h-4 w-4" strokeWidth={2} aria-hidden />Editar
                   </Button>
+                  <Button type="button" variant="secondary" className="col-span-2 px-2" aria-label={`Ver estado de cuenta de ${customer.nombre}`} onClick={() => viewStatement(customer)}>
+                    <FileText className="h-4 w-4" strokeWidth={2} aria-hidden />Estado de cuenta
+                  </Button>
                 </div>
               </Card>
             ))}
@@ -201,7 +208,7 @@ export function CustomersPage() {
 
           <Card className="pf-table-shell hidden overflow-hidden p-0 md:block">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[860px] text-left text-sm">
+              <table className="w-full min-w-[980px] text-left text-sm">
                 <thead className="pf-table-thead">
                   <tr><th className="px-4 py-3">Cliente</th><th className="px-4 py-3">Identidad</th><th className="px-4 py-3">Teléfono</th><th className="px-4 py-3">Dirección / trabajo</th><th className="px-4 py-3">Estado</th><th className="px-4 py-3 text-right">Acciones</th></tr>
                 </thead>
@@ -213,7 +220,7 @@ export function CustomersPage() {
                       <td className="px-4 py-3 text-pf-text-secondary">{customer.telefono || "—"}</td>
                       <td className="max-w-[260px] px-4 py-3"><p className="truncate text-pf-text-secondary">{customer.direccion || "Sin dirección"}</p>{customer.lugar_trabajo ? <p className="truncate text-xs text-pf-muted">{customer.lugar_trabajo}</p> : null}</td>
                       <td className="px-4 py-3"><CustomerStatusBadge status={customer.estado} /></td>
-                      <td className="px-4 py-3"><div className="flex justify-end gap-2"><Button type="button" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Crear préstamo para ${customer.nombre}`} disabled={customer.estado === "cancelado"} onClick={() => newLoan(customer)}><FilePlus2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Préstamo</Button><Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Editar cliente ${customer.nombre}`} onClick={() => openEdit(customer)}><Pencil className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Editar</Button></div></td>
+                      <td className="px-4 py-3"><div className="flex justify-end gap-2"><Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Ver estado de cuenta de ${customer.nombre}`} onClick={() => viewStatement(customer)}><FileText className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Estado de cuenta</Button><Button type="button" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Crear préstamo para ${customer.nombre}`} disabled={customer.estado === "cancelado"} onClick={() => newLoan(customer)}><FilePlus2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Préstamo</Button><Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Editar cliente ${customer.nombre}`} onClick={() => openEdit(customer)}><Pencil className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Editar</Button></div></td>
                     </tr>
                   ))}
                 </tbody>

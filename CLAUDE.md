@@ -92,11 +92,18 @@ Moneda: Lempira, símbolo `L` (`formatMoney` en
 6. ✅ Planes comerciales: diario 24/40 días, semanal 3/6/9/12 meses y
    quincenal 9/12 meses. El semanal guarda un día fijo de lunes a sábado;
    los préstamos mensuales anteriores siguen siendo compatibles.
+7. ✅ Agenda de cobros (vencidos, hoy y próximos 7 días), recordatorios
+   manuales por WhatsApp, alertas accionables en el panel y estado de cuenta
+   A4/PDF por cliente.
 
 El porcentaje de mora de 1.5 % queda guardado como condición en los préstamos
 nuevos, pero todavía no se agrega automáticamente al saldo. Falta confirmar la
 prioridad de aplicación entre mora, interés y capital. El MVP mantiene interés
 fijo total y marca mora por calendario.
+
+Los correos automáticos y la solicitud formal con codeudor/firma quedan para
+una etapa posterior: requieren credenciales privadas y definición del flujo de
+aprobación. No bloquearon las funciones operativas actuales.
 
 ## Recibos / impresión
 

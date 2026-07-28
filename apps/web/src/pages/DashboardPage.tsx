@@ -1,10 +1,11 @@
-import { AlertTriangle, ArrowRight, Banknote, BarChart3, CheckCircle2, FilePlus2, HandCoins, Landmark, TrendingUp, Users, WalletCards } from "lucide-react";
+import { AlertTriangle, ArrowRight, Banknote, BarChart3, CalendarClock, CalendarDays, CheckCircle2, FilePlus2, HandCoins, Landmark, TrendingUp, Users, WalletCards } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { BrandLogo } from "../components/BrandLogo";
 import { Button, Card } from "../components/ui";
+import { getCollectionAgenda, type CollectionAgenda } from "../lib/collectionAgendaService";
 import { formatMoney } from "../lib/format";
 import { supabase } from "../lib/supabase";
 import { refreshPortfolioStatuses } from "../lib/paymentService";
@@ -114,6 +115,85 @@ function KpiCard({
   return content;
 }
 
+function AgendaAttention({ summary }: { summary: CollectionAgenda["summary"] }) {
+  const alerts = [
+    {
+      label: "Cuotas vencidas",
+      metric: summary.vencidas,
+      to: "/agenda?filtro=vencidas",
+      icon: AlertTriangle,
+      className: "border-pf-danger-soft bg-pf-danger-soft/35 text-pf-danger",
+    },
+    {
+      label: "Vencen hoy",
+      metric: summary.hoy,
+      to: "/agenda?filtro=hoy",
+      icon: CalendarClock,
+      className: "border-pf-warning-soft bg-pf-warning-soft/35 text-pf-warning",
+    },
+    {
+      label: "Próximos 7 días",
+      metric: summary.proximas,
+      to: "/agenda?filtro=proximas",
+      icon: CalendarDays,
+      className: "border-pf-info-soft bg-pf-info-soft/35 text-pf-info",
+    },
+  ];
+
+  return (
+    <Card className="pf-glass-card-panel space-y-4 p-4 sm:p-5">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-xs font-extrabold uppercase tracking-widest text-pf-muted">Cobros que requieren atención</p>
+          <p className="mt-1 text-sm text-pf-text-tertiary">Priorice vencidos, cobros del día y las cuotas que están por llegar.</p>
+        </div>
+        <Link to="/agenda" className="inline-flex items-center gap-1.5 self-start text-sm font-bold text-pf-primary-hover hover:underline">
+          Abrir agenda <ArrowRight className="h-4 w-4" strokeWidth={2} aria-hidden />
+        </Link>
+      </div>
+
+      {summary.total.installments === 0 ? (
+        <Link
+          to="/agenda"
+          className="flex items-center gap-3 rounded-2xl border border-pf-success-soft bg-pf-success-soft/35 p-4 text-pf-success transition hover:bg-pf-success-soft/55"
+        >
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-pf-surface-elevated/85 shadow-sm">
+            <CheckCircle2 className="h-5 w-5" strokeWidth={2} aria-hidden />
+          </span>
+          <span>
+            <strong className="block text-sm text-pf-text">Agenda al día</strong>
+            <span className="text-xs text-pf-text-tertiary">No hay cuotas vencidas ni próximas durante los siguientes 7 días.</span>
+          </span>
+        </Link>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-3">
+          {alerts.map(({ label, metric, to, icon: Icon, className }) => (
+            <Link
+              key={to}
+              to={to}
+              className={`group rounded-2xl border p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${className}`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-pf-muted">{label}</p>
+                  <p className="mt-1 text-xl font-black tabular-nums text-pf-text">{metric.installments}</p>
+                </div>
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-pf-surface-elevated/85 shadow-sm">
+                  <Icon className="h-4 w-4" strokeWidth={2} aria-hidden />
+                </span>
+              </div>
+              <p className="mt-2 text-sm font-extrabold tabular-nums text-pf-text">{formatMoney(SYM, metric.amount)}</p>
+              <p className="mt-0.5 text-[11px] text-pf-text-tertiary">
+                {metric.customers} cliente{metric.customers === 1 ? "" : "s"}
+              </p>
+            </Link>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 type Kpis = {
   clientesActivos: number;
   totalPrestado: number;
@@ -124,6 +204,7 @@ type Kpis = {
   moraCount: number;
   cobradoHoy: number;
   pagosHoyCount: number;
+  agenda: CollectionAgenda["summary"] | null;
 };
 
 export function DashboardPage() {
@@ -131,12 +212,14 @@ export function DashboardPage() {
   const { config } = useBusinessConfig();
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [err, setErr] = useState("");
+  const [agendaErr, setAgendaErr] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       setErr("");
+      setAgendaErr("");
       setKpis(null);
       await refreshPortfolioStatuses();
       const fechaHonduras = new Intl.DateTimeFormat("en-CA", {
@@ -148,10 +231,11 @@ export function DashboardPage() {
       const inicioHoyMs = new Date(`${fechaHonduras}T00:00:00-06:00`).getTime();
       const inicioHoy = new Date(inicioHoyMs).toISOString();
       const inicioManana = new Date(inicioHoyMs + 24 * 60 * 60 * 1000).toISOString();
-      const [pr, pa, cl] = await Promise.all([
+      const [pr, pa, cl, agenda] = await Promise.all([
         supabase.from("prestamos").select("monto,saldo,estado"),
         supabase.from("pagos").select("monto").gte("fecha", inicioHoy).lt("fecha", inicioManana),
         supabase.from("clientes").select("*"),
+        getCollectionAgenda({ refreshStatuses: false }).catch(() => null),
       ]);
       if (pr.error) throw new Error(pr.error.message);
       if (pa.error) throw new Error(pa.error.message);
@@ -161,6 +245,7 @@ export function DashboardPage() {
       const conSaldo = vivos.filter((p) => p.estado === "activo" || p.estado === "al_dia" || p.estado === "en_mora");
       const mora = vivos.filter((p) => p.estado === "en_mora");
       if (cancelled) return;
+      setAgendaErr(agenda ? "" : "No pudimos cargar las alertas de cobro. Los indicadores principales siguen actualizados.");
       setKpis({
         clientesActivos: cl.data.filter((customer) => !customer.estado || customer.estado === "activo").length,
         totalPrestado: vivos.reduce((s, p) => s + Number(p.monto), 0),
@@ -171,6 +256,7 @@ export function DashboardPage() {
         moraCount: mora.length,
         cobradoHoy: pa.data.reduce((s, p) => s + Number(p.monto), 0),
         pagosHoyCount: pa.data.length,
+        agenda: agenda?.summary ?? null,
       });
     }
     load().catch(() => {
@@ -266,13 +352,30 @@ export function DashboardPage() {
         </div>
       )}
 
+      {kpis?.agenda ? (
+        <AgendaAttention summary={kpis.agenda} />
+      ) : kpis && agendaErr ? (
+        <Card className="pf-glass-card-panel p-5 text-sm text-pf-danger" role="status">
+          <p>{agendaErr}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" onClick={() => setReloadKey((value) => value + 1)}>
+              Reintentar alertas
+            </Button>
+            <Link to="/agenda" className="inline-flex min-h-10 items-center rounded-xl px-3 text-sm font-bold text-pf-primary-hover hover:underline">
+              Abrir agenda
+            </Link>
+          </div>
+        </Card>
+      ) : null}
+
       {/* Acceso rápido */}
       <div>
         <p className="mb-3 text-xs font-bold uppercase tracking-widest text-pf-muted">Acceso rápido</p>
-        <div className="grid max-w-5xl grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid max-w-5xl grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           {[
             { to: "/prestamos/nuevo", label: "Nuevo préstamo", icon: FilePlus2, primary: true },
             { to: "/pagos/nuevo", label: "Registrar pago", icon: Banknote, primary: false },
+            { to: "/agenda", label: "Agenda", icon: CalendarClock, primary: false },
             { to: "/prestamos", label: "Préstamos", icon: WalletCards, primary: false },
             { to: "/clientes", label: "Clientes", icon: Users, primary: false },
             { to: "/reportes", label: "Reportes", icon: BarChart3, primary: false },
