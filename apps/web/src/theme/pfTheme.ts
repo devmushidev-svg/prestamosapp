@@ -2,7 +2,7 @@ export const PF_THEME_STORAGE_KEY = "pf-theme";
 
 export const PF_THEME_META_COLOR_VAR = "--pf-theme-color";
 
-export type PfThemeId = "default" | "slate" | "ocean";
+export type PfThemeId = "default" | "slate" | "ocean" | "dark";
 
 export type PfThemePreset = {
   id: PfThemeId;
@@ -29,10 +29,16 @@ export const PF_THEME_PRESETS: Record<PfThemeId, PfThemePreset> = {
     datasetValue: "ocean",
     fallbackThemeColor: "#eef8ff",
   },
+  dark: {
+    id: "dark",
+    label: "Oscuro",
+    datasetValue: "dark",
+    fallbackThemeColor: "#0f172a",
+  },
 };
 
 function isPfThemeId(value: string | null): value is PfThemeId {
-  return value != null && value in PF_THEME_PRESETS;
+  return value != null && Object.prototype.hasOwnProperty.call(PF_THEME_PRESETS, value);
 }
 
 export function getStoredTheme(): PfThemeId {

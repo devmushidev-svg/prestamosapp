@@ -59,8 +59,10 @@
 
 - **configuracion_prestamista**: ficha singleton del negocio; nombre, propietario,
   RTN, teléfono y dirección. Su ausencia activa la configuración inicial.
-- **clientes**: nombre, identidad (DNI), teléfono, dirección, lugar_trabajo,
-  referencias, estado (activo/moroso/cancelado), notas.
+- **clientes**: nombre, identidad (DNI), teléfono, dirección, colonia,
+  lugar_trabajo, referencias, foto privada de la fachada, estado
+  (activo/moroso/cancelado), notas y orden_ruta (posición manual en la ruta de
+  cobro).
 - **prestamos**: numero legible, cliente_id, monto (capital), tasa_interes, plazo
   (nº cuotas), frecuencia (diario/semanal/quincenal/mensual), fecha_inicio,
   fecha_primer_pago, dia_pago_semana, tasa_mora y saldo,
@@ -71,6 +73,9 @@
   fecha, monto, saldos anterior/posterior y snapshot inmutable del comprobante.
 - **pago_aplicaciones**: reparto de cada pago entre una o varias cuotas; permite
   pagos parciales sin duplicar recibos.
+- **gestiones**: bitácora de la visita de cobranza; cliente_id, fecha, resultado
+  (pago/no_estaba/promesa_pago/se_nego/otro), monto y fecha prometidos, pago_id
+  y notas.
 
 Tipos TypeScript en [`apps/web/src/types.ts`](apps/web/src/types.ts).
 Moneda: Lempira, símbolo `L` (`formatMoney` en
@@ -95,6 +100,10 @@ Moneda: Lempira, símbolo `L` (`formatMoney` en
 7. ✅ Agenda de cobros (vencidos, hoy y próximos 7 días), recordatorios
    manuales por WhatsApp, alertas accionables en el panel y estado de cuenta
    A4/PDF por cliente.
+8. ✅ **Cobranza en campo** (`/cobranza`): ruta de cobro con pago sugerido,
+   semanas de atraso, visitados/no visitados del día, filtro por colonia,
+   orden por criterios y orden manual; ficha de gestión del cliente; pantalla
+   de abono a nivel cliente y gestión sin cobro con promesa de pago.
 
 El porcentaje de mora de 1.5 % queda guardado como condición en los préstamos
 nuevos, pero todavía no se agrega automáticamente al saldo. Falta confirmar la
@@ -104,6 +113,11 @@ fijo total y marca mora por calendario.
 Los correos automáticos y la solicitud formal con codeudor/firma quedan para
 una etapa posterior: requieren credenciales privadas y definición del flujo de
 aprobación. No bloquearon las funciones operativas actuales.
+
+La ruta se abre en Google Maps usando las direcciones guardadas, sin necesitar
+una llave adicional, y cada ficha admite una foto privada de la fachada. La
+cobranza es **solo en línea**: no hay cola offline; si falla la red, el cobro
+se reintenta con la misma solicitud y nunca se duplica.
 
 ## Recibos / impresión
 

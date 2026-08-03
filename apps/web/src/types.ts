@@ -6,10 +6,15 @@ export type Cliente = {
   identidad: string | null;
   telefono: string | null;
   direccion: string | null;
+  colonia: string | null;
   lugar_trabajo: string | null;
   referencias: string | null;
+  /** Ruta privada en Supabase Storage para la foto de la fachada. */
+  foto_fachada_path: string | null;
   estado: EstadoCliente;
   notas: string | null;
+  /** Posición manual en la ruta de cobro; null = sin ordenar. */
+  orden_ruta: number | null;
   creado_en: string;
 };
 
@@ -103,6 +108,21 @@ export type ReciboSnapshot = {
     direccion?: string | null;
   };
   aplicaciones: Array<{ numeroCuota: number; monto: number }>;
+};
+
+export type ResultadoGestion = "pago" | "no_estaba" | "promesa_pago" | "se_nego" | "otro";
+
+/** Visita de cobranza en campo: una fila por gestión, con o sin cobro. */
+export type Gestion = {
+  id: string;
+  cliente_id: string;
+  fecha: string;
+  resultado: ResultadoGestion;
+  monto_prometido: number | null;
+  fecha_promesa: string | null;
+  pago_id: string | null;
+  notas: string | null;
+  creado_en: string;
 };
 
 export type PagoAplicacion = {

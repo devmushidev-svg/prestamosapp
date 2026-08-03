@@ -13,6 +13,7 @@ const EMPTY_FORM: CustomerInput = {
   identidad: "",
   telefono: "",
   direccion: "",
+  colonia: "",
   lugar_trabajo: "",
   referencias: "",
   estado: "activo",
@@ -54,7 +55,7 @@ export function CustomersPage() {
     const needle = query.trim().toLocaleLowerCase("es-HN");
     if (!needle) return list;
     return list.filter((customer) =>
-      [customer.nombre, customer.identidad, customer.telefono, customer.direccion, customer.lugar_trabajo]
+      [customer.nombre, customer.identidad, customer.telefono, customer.direccion, customer.colonia, customer.lugar_trabajo]
         .filter(Boolean)
         .some((value) => value!.toLocaleLowerCase("es-HN").includes(needle))
     );
@@ -81,6 +82,7 @@ export function CustomersPage() {
       identidad: customer.identidad ?? "",
       telefono: customer.telefono ?? "",
       direccion: customer.direccion ?? "",
+      colonia: customer.colonia ?? "",
       lugar_trabajo: customer.lugar_trabajo ?? "",
       referencias: customer.referencias ?? "",
       estado: customer.estado ?? "activo",
@@ -152,7 +154,7 @@ export function CustomersPage() {
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Nombre, DNI, teléfono, dirección o trabajo…"
+              placeholder="Nombre, DNI, teléfono, dirección, colonia o trabajo…"
             />
           </div>
         </Field>
@@ -183,7 +185,7 @@ export function CustomersPage() {
                 <div className="space-y-1.5 text-sm text-pf-text-secondary">
                   <p className="flex min-w-0 items-center gap-2"><ReceiptText className="h-4 w-4 shrink-0 text-pf-muted" strokeWidth={2} aria-hidden /><span className="min-w-0 break-words">{customer.identidad || "Sin DNI"}</span></p>
                   <p className="flex min-w-0 items-center gap-2"><Phone className="h-4 w-4 shrink-0 text-pf-muted" strokeWidth={2} aria-hidden /><span className="min-w-0 break-words">{customer.telefono || "Sin teléfono"}</span></p>
-                  <p className="flex min-w-0 items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-pf-muted" strokeWidth={2} aria-hidden /><span className="min-w-0 break-words">{customer.direccion || "Sin dirección"}</span></p>
+                  <p className="flex min-w-0 items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-pf-muted" strokeWidth={2} aria-hidden /><span className="min-w-0 break-words">{[customer.direccion, customer.colonia && `Col. ${customer.colonia}`].filter(Boolean).join(" · ") || "Sin dirección"}</span></p>
                   {customer.lugar_trabajo ? <p className="flex min-w-0 items-center gap-2"><BriefcaseBusiness className="h-4 w-4 shrink-0 text-pf-muted" strokeWidth={2} aria-hidden /><span className="min-w-0 break-words">{customer.lugar_trabajo}</span></p> : null}
                 </div>
                 <div className="grid grid-cols-2 gap-2 border-t border-pf-border-soft pt-3">
@@ -218,7 +220,7 @@ export function CustomersPage() {
                       <td className="px-4 py-3 font-bold text-pf-text">{customer.nombre}</td>
                       <td className="px-4 py-3 text-pf-text-secondary">{customer.identidad || "—"}</td>
                       <td className="px-4 py-3 text-pf-text-secondary">{customer.telefono || "—"}</td>
-                      <td className="max-w-[260px] px-4 py-3"><p className="truncate text-pf-text-secondary">{customer.direccion || "Sin dirección"}</p>{customer.lugar_trabajo ? <p className="truncate text-xs text-pf-muted">{customer.lugar_trabajo}</p> : null}</td>
+                      <td className="max-w-[260px] px-4 py-3"><p className="truncate text-pf-text-secondary">{[customer.direccion, customer.colonia && `Col. ${customer.colonia}`].filter(Boolean).join(" · ") || "Sin dirección"}</p>{customer.lugar_trabajo ? <p className="truncate text-xs text-pf-muted">{customer.lugar_trabajo}</p> : null}</td>
                       <td className="px-4 py-3"><CustomerStatusBadge status={customer.estado} /></td>
                       <td className="px-4 py-3"><div className="flex justify-end gap-2"><Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Ver estado de cuenta de ${customer.nombre}`} onClick={() => viewStatement(customer)}><FileText className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Estado de cuenta</Button><Button type="button" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Crear préstamo para ${customer.nombre}`} disabled={customer.estado === "cancelado"} onClick={() => newLoan(customer)}><FilePlus2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Préstamo</Button><Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Editar cliente ${customer.nombre}`} onClick={() => openEdit(customer)}><Pencil className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Editar</Button></div></td>
                     </tr>
@@ -237,6 +239,7 @@ export function CustomersPage() {
           <Field label="Identidad (DNI)" htmlFor="customer-id"><Input id="customer-id" value={form.identidad} onChange={(event) => setForm((current) => ({ ...current, identidad: event.target.value }))} placeholder="0801-1990-12345" /></Field>
           <Field label="Teléfono" htmlFor="customer-phone"><Input id="customer-phone" inputMode="tel" autoComplete="tel" value={form.telefono} onChange={(event) => setForm((current) => ({ ...current, telefono: event.target.value }))} /></Field>
           <Field label="Dirección" htmlFor="customer-address" className="sm:col-span-2"><Textarea id="customer-address" rows={2} autoComplete="street-address" value={form.direccion} onChange={(event) => setForm((current) => ({ ...current, direccion: event.target.value }))} /></Field>
+          <Field label="Colonia (opcional)" htmlFor="customer-colonia"><Input id="customer-colonia" value={form.colonia} onChange={(event) => setForm((current) => ({ ...current, colonia: event.target.value }))} placeholder="San Francisco" /><span className="text-xs text-pf-muted">Agrupa y filtra la ruta de cobro.</span></Field>
           <Field label="Lugar de trabajo (opcional)" htmlFor="customer-work"><Input id="customer-work" value={form.lugar_trabajo} onChange={(event) => setForm((current) => ({ ...current, lugar_trabajo: event.target.value }))} /></Field>
           <Field label="Estado" htmlFor="customer-status"><Select id="customer-status" value={form.estado} onChange={(event) => setForm((current) => ({ ...current, estado: event.target.value as EstadoCliente }))}><option value="activo">Activo</option><option value="moroso">Moroso</option><option value="cancelado">Cancelado</option></Select></Field>
           <Field label="Referencias (opcional)" htmlFor="customer-references"><Textarea id="customer-references" rows={3} value={form.referencias} onChange={(event) => setForm((current) => ({ ...current, referencias: event.target.value }))} placeholder="Nombre, relación y teléfono; una referencia por línea" /></Field>

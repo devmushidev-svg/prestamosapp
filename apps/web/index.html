@@ -7,6 +7,15 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <!-- Alinear con --pf-theme-color en src/index.css -->
     <meta name="theme-color" content="#fff7ed" />
+    <!-- Aplica el tema guardado antes de la primera pintura (evita el destello claro con tema oscuro). Valores válidos: data-set de PF_THEME_PRESETS en src/theme/pfTheme.ts. -->
+    <script>
+      try {
+        var pfTheme = localStorage.getItem("pf-theme");
+        if (pfTheme === "slate" || pfTheme === "ocean" || pfTheme === "dark") {
+          document.documentElement.dataset.pfTheme = pfTheme;
+        }
+      } catch (e) {}
+    </script>
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="MultiPréstamos" />

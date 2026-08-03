@@ -12,6 +12,7 @@ create table if not exists clientes (
   direccion text,
   lugar_trabajo text,
   referencias text,
+  foto_fachada_path text,
   estado text not null default 'activo'
     check (estado in ('activo', 'moroso', 'cancelado')),
   notas text,
@@ -125,11 +126,46 @@ create table if not exists pago_aplicaciones (
   constraint pago_aplicaciones_pago_cuota_unique unique (pago_id, cuota_id)
 );
 
+-- Bitácora de visitas de cobranza en campo: una fila por gestión (con o sin
+-- cobro). `pago_id` enlaza la gestión con el pago cuando la visita cobró.
+create table if not exists gestiones (
+  id uuid primary key default gen_random_uuid(),
+  cliente_id uuid not null references clientes(id),
+  fecha timestamptz not null default now(),
+  resultado text not null,
+  monto_prometido numeric(14,2),
+  fecha_promesa date,
+  pago_id uuid references pagos(id),
+  notas text,
+  creado_en timestamptz not null default now()
+);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'gestiones_resultado_valido' and conrelid = 'public.gestiones'::regclass
+  ) then
+    alter table gestiones add constraint gestiones_resultado_valido
+      check (resultado in ('pago', 'no_estaba', 'promesa_pago', 'se_nego', 'otro'));
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'gestiones_promesa_completa' and conrelid = 'public.gestiones'::regclass
+  ) then
+    alter table gestiones add constraint gestiones_promesa_completa
+      check (resultado <> 'promesa_pago' or (monto_prometido > 0 and fecha_promesa is not null));
+  end if;
+end $$;
+
 -- Migraciones idempotentes para proyectos donde las tablas ya existían antes
 -- de agregar estas validaciones.
 alter table clientes add column if not exists lugar_trabajo text;
 alter table clientes add column if not exists referencias text;
 alter table clientes add column if not exists estado text not null default 'activo';
+alter table clientes add column if not exists colonia text;
+alter table clientes add column if not exists orden_ruta integer;
+alter table clientes add column if not exists foto_fachada_path text;
 
 alter table configuracion_prestamista add column if not exists nombre_negocio text;
 alter table configuracion_prestamista add column if not exists nombre_propietario text;
@@ -384,6 +420,10 @@ create unique index if not exists idx_pagos_numero_recibo_unique on pagos (numer
 create index if not exists idx_pago_aplicaciones_pago on pago_aplicaciones (pago_id);
 create index if not exists idx_pago_aplicaciones_cuota on pago_aplicaciones (cuota_id);
 create index if not exists idx_pago_aplicaciones_prestamo on pago_aplicaciones (prestamo_id);
+create index if not exists idx_gestiones_cliente_fecha on gestiones (cliente_id, fecha desc);
+create index if not exists idx_gestiones_fecha on gestiones (fecha);
+-- La ruta de cobro lee todas las cuotas no pagadas de la cartera.
+create index if not exists idx_cuotas_estado_vencimiento on cuotas (estado, fecha_vencimiento);
 
 -- RLS: acceso total para usuarios autenticados (los usuarios se crean a mano
 -- en el panel de Supabase: Authentication → Users → Add user).
@@ -394,6 +434,7 @@ alter table cuotas enable row level security;
 alter table pagos enable row level security;
 alter table configuracion_prestamista enable row level security;
 alter table pago_aplicaciones enable row level security;
+alter table gestiones enable row level security;
 
 drop policy if exists "autenticados" on clientes;
 drop policy if exists "autenticados" on prestamos;
@@ -404,6 +445,7 @@ drop policy if exists "configuracion_leer" on configuracion_prestamista;
 drop policy if exists "configuracion_insertar" on configuracion_prestamista;
 drop policy if exists "configuracion_actualizar" on configuracion_prestamista;
 drop policy if exists "autenticados" on pago_aplicaciones;
+drop policy if exists "autenticados" on gestiones;
 
 create policy "autenticados" on clientes for all to authenticated using (true) with check (true);
 create policy "autenticados" on prestamos for all to authenticated using (true) with check (true);
@@ -416,6 +458,35 @@ create policy "configuracion_insertar" on configuracion_prestamista
 create policy "configuracion_actualizar" on configuracion_prestamista
   for update to authenticated using (id = 1) with check (id = 1);
 create policy "autenticados" on pago_aplicaciones for all to authenticated using (true) with check (true);
+create policy "autenticados" on gestiones for all to authenticated using (true) with check (true);
+
+-- Fotos privadas de fachadas. Se sirven con enlaces temporales y solo los
+-- usuarios autenticados pueden leerlas o modificarlas.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'fachadas',
+  'fachadas',
+  false,
+  10485760,
+  array['image/jpeg', 'image/png', 'image/webp']::text[]
+)
+on conflict (id) do update set
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "fachadas_leer" on storage.objects;
+drop policy if exists "fachadas_insertar" on storage.objects;
+drop policy if exists "fachadas_actualizar" on storage.objects;
+drop policy if exists "fachadas_eliminar" on storage.objects;
+create policy "fachadas_leer" on storage.objects
+  for select to authenticated using (bucket_id = 'fachadas');
+create policy "fachadas_insertar" on storage.objects
+  for insert to authenticated with check (bucket_id = 'fachadas');
+create policy "fachadas_actualizar" on storage.objects
+  for update to authenticated using (bucket_id = 'fachadas') with check (bucket_id = 'fachadas');
+create policy "fachadas_eliminar" on storage.objects
+  for delete to authenticated using (bucket_id = 'fachadas');
 
 revoke all on table configuracion_prestamista from public, anon, authenticated;
 grant select, insert, update on table configuracion_prestamista to authenticated;

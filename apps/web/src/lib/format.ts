@@ -34,6 +34,22 @@ export function formatTimeOnly(d: string | Date): string {
   });
 }
 
+/** Día civil de Honduras: fecha YYYY-MM-DD y límites ISO del día para filtrar timestamps. */
+export function hondurasTodayRange(): { fecha: string; inicioIso: string; finIso: string } {
+  const fecha = new Intl.DateTimeFormat("en-CA", {
+    timeZone: HONDURAS_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  const inicioMs = new Date(`${fecha}T00:00:00-06:00`).getTime();
+  return {
+    fecha,
+    inicioIso: new Date(inicioMs).toISOString(),
+    finIso: new Date(inicioMs + 24 * 60 * 60 * 1000).toISOString(),
+  };
+}
+
 export function formatLoanNumber(numero: number | null, id?: string): string {
   if (numero != null && Number.isFinite(numero)) return `PRE-${String(numero).padStart(6, "0")}`;
   return id ? `PRE-${id.slice(0, 8).toUpperCase()}` : "PRE-PENDIENTE";
