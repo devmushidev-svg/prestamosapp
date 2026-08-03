@@ -11,6 +11,8 @@ export type PrestamoRuta = {
   cuotas: CuotaConSaldo[];
   atrasado: number;
   cuotaCorriente: number;
+  cuotasVencidas: number;
+  diasAtraso: number;
   pagosRealizados: number;
   proximaFecha: string | null;
 };
@@ -25,7 +27,8 @@ export type ClienteRuta = {
   cuotaCorriente: number;
   pagoRequerido: number;
   pagoSugerido: number;
-  semanasAtraso: number;
+  cuotasVencidas: number;
+  diasAtraso: number;
   visitadoHoy: boolean;
   promesa: { monto: number; fecha: string } | null;
 };
@@ -66,18 +69,25 @@ function buildPrestamoRuta(prestamo: PrestamoConCliente, cuotasCrudas: Cuota[], 
   const cuotas = withInstallmentBalances(cuotasCrudas);
   let atrasadoCents = 0;
   let cuotaCorrienteCents = 0;
+  let cuotasVencidas = 0;
+  let diasAtraso = 0;
   let pendientes = 0;
   let proximaFecha: string | null = null;
   for (const cuota of cuotas) {
     const pendienteCents = moneyToCents(cuota.pendiente);
     if (pendienteCents <= 0) continue;
     pendientes += 1;
-    if (proximaFecha === null) proximaFecha = cuota.fecha_vencimiento;
+    if (proximaFecha === null || cuota.fecha_vencimiento < proximaFecha) {
+      proximaFecha = cuota.fecha_vencimiento;
+    }
     if (cuota.fecha_vencimiento < hoy) {
       atrasadoCents += pendienteCents;
-    } else if (cuotaCorrienteCents === 0) {
-      // La próxima cuota por vencer es el período corriente (el "pago semanal" del cobrador).
-      cuotaCorrienteCents = pendienteCents;
+      cuotasVencidas += 1;
+      diasAtraso = Math.max(diasAtraso, daysUntilToday(cuota.fecha_vencimiento, hoy));
+    } else if (cuota.fecha_vencimiento === hoy) {
+      // Solo la cuota que vence hoy pertenece a la ruta operativa del día.
+      // Las futuras siguen visibles en Agenda y en el detalle del préstamo.
+      cuotaCorrienteCents += pendienteCents;
     }
   }
   return {
@@ -85,6 +95,8 @@ function buildPrestamoRuta(prestamo: PrestamoConCliente, cuotasCrudas: Cuota[], 
     cuotas,
     atrasado: atrasadoCents / 100,
     cuotaCorriente: cuotaCorrienteCents / 100,
+    cuotasVencidas,
+    diasAtraso,
     pagosRealizados: Math.max(0, prestamo.plazo - pendientes),
     proximaFecha,
   };
@@ -101,15 +113,10 @@ function buildClienteRuta(
   const atrasadoCents = prestamos.reduce((s, p) => s + moneyToCents(p.atrasado), 0);
   const cuotaCorrienteCents = prestamos.reduce((s, p) => s + moneyToCents(p.cuotaCorriente), 0);
   const moratoriosCents = 0;
-  let semanasAtraso = 0;
-  for (const item of prestamos) {
-    const vencidaMasAntigua = item.cuotas.find(
-      (cuota) => cuota.pendiente > 0 && cuota.fecha_vencimiento < hoy
-    );
-    if (!vencidaMasAntigua) continue;
-    const semanas = Math.ceil(Math.max(1, daysUntilToday(vencidaMasAntigua.fecha_vencimiento, hoy)) / 7);
-    semanasAtraso = Math.max(semanasAtraso, semanas);
-  }
+  const cuotasVencidas = prestamos.reduce((s, p) => s + p.cuotasVencidas, 0);
+  const diasAtraso = prestamos.reduce((maximo, item) => Math.max(maximo, item.diasAtraso), 0);
+  const sugeridoCalendarioCents = atrasadoCents + moratoriosCents + cuotaCorrienteCents;
+  const promesaHoyCents = promesa?.fecha === hoy ? Math.max(0, moneyToCents(promesa.monto)) : 0;
   return {
     cliente,
     prestamos,
@@ -119,8 +126,11 @@ function buildClienteRuta(
     cuotaCorriente: cuotaCorrienteCents / 100,
     // min(): tope de seguridad para cuando existan moratorios; hoy nunca recorta.
     pagoRequerido: Math.min(atrasadoCents + moratoriosCents, saldoTotalCents) / 100,
-    pagoSugerido: Math.min(atrasadoCents + moratoriosCents + cuotaCorrienteCents, saldoTotalCents) / 100,
-    semanasAtraso,
+    // Una promesa que vence hoy funciona como sugerencia operativa, pero nunca
+    // reduce lo vencido ni permite cobrar más que el saldo real.
+    pagoSugerido: Math.min(Math.max(sugeridoCalendarioCents, promesaHoyCents), saldoTotalCents) / 100,
+    cuotasVencidas,
+    diasAtraso,
     visitadoHoy,
     promesa,
   };
@@ -202,15 +212,18 @@ export async function getRutaCobro(): Promise<RutaCobro> {
   for (const cliente of clientes) {
     const prestamosCliente = prestamosPorCliente.get(cliente.id);
     if (!prestamosCliente?.length) continue;
-    ruta.push(
-      buildClienteRuta(
-        cliente,
-        prestamosCliente,
-        hoy,
-        clientesVisitados.has(cliente.id),
-        promesaPorCliente.get(cliente.id) ?? null
-      )
+    const item = buildClienteRuta(
+      cliente,
+      prestamosCliente,
+      hoy,
+      clientesVisitados.has(cliente.id),
+      promesaPorCliente.get(cliente.id) ?? null
     );
+    // La ruta del día contiene cobros vencidos o que vencen hoy. Quienes ya
+    // fueron visitados permanecen visibles hasta que termine la jornada.
+    if (item.pagoSugerido > 0 || item.visitadoHoy || item.promesa?.fecha === hoy) {
+      ruta.push(item);
+    }
   }
   return { clientes: ruta, migracionPendiente };
 }

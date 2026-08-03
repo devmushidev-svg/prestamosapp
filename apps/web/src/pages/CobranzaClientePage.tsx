@@ -1,4 +1,4 @@
-import { ArrowLeft, CalendarClock, Camera, ClipboardX, ExternalLink, HandCoins, History, MapPin, Navigation, Phone, ReceiptText, Route, UserRound } from "lucide-react";
+import { ArrowLeft, CalendarClock, Camera, CheckCircle2, ClipboardX, Clock3, ExternalLink, HandCoins, History, MapPin, Navigation, Phone, ReceiptText, Route, TriangleAlert, UserRound, WalletCards } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { GestionSinCobroModal } from "../components/GestionSinCobroModal";
@@ -9,6 +9,137 @@ import { getClienteRuta, getHistorialCobranza, type ClienteRuta, type HistorialC
 import { getFacadePhotoUrl, uploadFacadePhoto } from "../lib/customerService";
 import { formatDate, formatDateOnly, formatLoanNumber, formatMoney } from "../lib/format";
 import { FREQUENCY_LABELS } from "../lib/loanCalculator";
+
+function SituacionCredito({ data }: { data: ClienteRuta }) {
+  const totalCuotas = data.prestamos.reduce((total, item) => total + item.prestamo.plazo, 0);
+  const pagosRealizados = data.prestamos.reduce(
+    (total, item) => total + Math.min(item.pagosRealizados, item.prestamo.plazo),
+    0,
+  );
+  const progreso = totalCuotas > 0 ? Math.min(100, Math.round((pagosRealizados / totalCuotas) * 100)) : 0;
+  const proximaFecha = data.prestamos
+    .map((item) => item.proximaFecha)
+    .filter((fecha): fecha is string => Boolean(fecha))
+    .sort()[0] ?? null;
+  const enAtraso = data.diasAtraso > 0 || data.atrasado > 0;
+
+  return (
+    <section
+      aria-labelledby="situacion-credito-title"
+      className="overflow-hidden rounded-2xl border border-pf-border-soft bg-pf-surface-elevated shadow-sm"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-pf-border-soft bg-gradient-to-r from-pf-info-soft/55 via-pf-primary-soft/45 to-pf-warning-soft/35 px-4 py-3.5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-pf-surface-elevated text-pf-primary shadow-sm">
+            <WalletCards className="h-4.5 w-4.5" strokeWidth={2} aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[11px] font-bold uppercase tracking-widest text-pf-muted">Resumen actualizado</p>
+            <h3 id="situacion-credito-title" className="font-extrabold text-pf-text">Situación del crédito</h3>
+          </div>
+        </div>
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-extrabold ${
+            enAtraso ? "bg-pf-danger-soft text-pf-danger" : "bg-pf-success-soft text-pf-success"
+          }`}
+        >
+          {enAtraso ? <TriangleAlert className="h-3.5 w-3.5" strokeWidth={2.2} aria-hidden /> : <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={2.2} aria-hidden />}
+          <span className="sr-only">Estado del crédito: </span>
+          {enAtraso ? "En atraso" : "Al día"}
+        </span>
+      </div>
+
+      <div className="space-y-4 p-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-2xl border border-pf-border-soft bg-pf-surface-soft p-4">
+            <p className="text-xs font-bold uppercase tracking-wide text-pf-muted">Saldo pendiente</p>
+            <p className="mt-1 whitespace-nowrap text-2xl font-extrabold tabular-nums text-pf-text">
+              {formatMoney("L", data.saldoTotal)}
+            </p>
+            <p className="mt-1 text-xs text-pf-text-secondary">
+              {data.prestamos.length} {data.prestamos.length === 1 ? "préstamo activo" : "préstamos activos"}
+            </p>
+          </div>
+
+          <div className={`rounded-2xl border p-4 ${enAtraso ? "border-pf-danger-soft bg-pf-danger-soft/35" : "border-pf-primary-soft bg-pf-primary-soft/35"}`}>
+            <p className={`text-xs font-bold uppercase tracking-wide ${enAtraso ? "text-pf-danger" : "text-pf-primary-hover"}`}>Pago sugerido</p>
+            <p className={`mt-1 whitespace-nowrap text-2xl font-extrabold tabular-nums ${enAtraso ? "text-pf-danger" : "text-pf-text"}`}>
+              {formatMoney("L", data.pagoSugerido)}
+            </p>
+            <p className="mt-1 text-xs text-pf-text-secondary">
+              {enAtraso ? "Para cubrir atraso y cuota de hoy." : "Para mantener el crédito al día."}
+            </p>
+          </div>
+        </div>
+
+        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="rounded-xl border border-pf-border-soft bg-pf-surface-soft px-3 py-2.5">
+            <dt className="text-[11px] font-bold uppercase tracking-wide text-pf-muted">Atrasado</dt>
+            <dd className={`mt-1 break-words font-extrabold tabular-nums ${data.atrasado > 0 ? "text-pf-danger" : "text-pf-text"}`}>
+              {formatMoney("L", data.atrasado)}
+            </dd>
+          </div>
+          <div className="rounded-xl border border-pf-border-soft bg-pf-surface-soft px-3 py-2.5">
+            <dt className="text-[11px] font-bold uppercase tracking-wide text-pf-muted">Cuotas vencidas</dt>
+            <dd className={`mt-1 font-extrabold tabular-nums ${data.cuotasVencidas > 0 ? "text-pf-danger" : "text-pf-text"}`}>
+              {data.cuotasVencidas}
+            </dd>
+          </div>
+          <div className="rounded-xl border border-pf-border-soft bg-pf-surface-soft px-3 py-2.5">
+            <dt className="text-[11px] font-bold uppercase tracking-wide text-pf-muted">Cuota de hoy</dt>
+            <dd className="mt-1 break-words font-extrabold tabular-nums text-pf-text">
+              {formatMoney("L", data.cuotaCorriente)}
+            </dd>
+          </div>
+          <div className="rounded-xl border border-pf-border-soft bg-pf-surface-soft px-3 py-2.5">
+            <dt className="text-[11px] font-bold uppercase tracking-wide text-pf-muted">Días de atraso</dt>
+            <dd className={`mt-1 font-extrabold tabular-nums ${data.diasAtraso > 0 ? "text-pf-danger" : "text-pf-text"}`}>
+              {data.diasAtraso}
+            </dd>
+          </div>
+        </dl>
+
+        <p className="rounded-xl border border-pf-warning-soft bg-pf-warning-soft/35 px-3 py-2 text-xs leading-relaxed text-pf-text-secondary">
+          La mora monetaria todavía no se aplica al saldo ni al pago sugerido.
+        </p>
+
+        <div className="grid gap-3 border-t border-pf-border-soft pt-4 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] sm:items-center">
+          <div className="flex items-center gap-3 rounded-xl bg-pf-surface-soft px-3 py-2.5">
+            <Clock3 className="h-5 w-5 shrink-0 text-pf-primary" strokeWidth={2} aria-hidden />
+            <div className="min-w-0">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-pf-muted">Próxima fecha</p>
+              <p className="truncate text-sm font-extrabold text-pf-text">
+                {proximaFecha ? formatDateOnly(proximaFecha) : "Sin próxima cuota"}
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-end justify-between gap-3 text-xs">
+              <span className="font-bold text-pf-text-secondary">Pagos realizados</span>
+              <strong className="tabular-nums text-pf-text">{pagosRealizados} de {totalCuotas} cuotas</strong>
+            </div>
+            <div
+              className="mt-2 h-2.5 overflow-hidden rounded-full bg-pf-border-soft"
+              role="progressbar"
+              aria-label="Progreso de pagos realizados"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progreso}
+              aria-valuetext={`${pagosRealizados} de ${totalCuotas} cuotas cubiertas`}
+            >
+              <span
+                className="block h-full rounded-full bg-gradient-to-r from-pf-primary to-pf-warning transition-[width]"
+                style={{ width: `${progreso}%` }}
+              />
+            </div>
+            <p className="mt-1.5 text-right text-[11px] font-semibold tabular-nums text-pf-muted">{progreso}% completado</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 export function CobranzaClientePage() {
   const navigate = useNavigate();
@@ -105,16 +236,16 @@ export function CobranzaClientePage() {
         <>
           <Card className="space-y-4 p-4 sm:p-5">
             <div className="flex items-start gap-3">
-              <span className={`flex size-12 shrink-0 items-center justify-center rounded-2xl ${data.semanasAtraso > 0 ? "bg-pf-danger-soft text-pf-danger" : "bg-pf-primary-soft text-pf-primary-hover"}`}>
+              <span className={`flex size-12 shrink-0 items-center justify-center rounded-2xl ${data.diasAtraso > 0 ? "bg-pf-danger-soft text-pf-danger" : "bg-pf-primary-soft text-pf-primary-hover"}`}>
                 <UserRound className="h-6 w-6" strokeWidth={2} aria-hidden />
               </span>
               <div className="min-w-0 flex-1">
-                <h2 className={`truncate text-lg font-extrabold ${data.semanasAtraso > 0 ? "text-pf-danger" : "text-pf-text"}`}>{cliente!.nombre}</h2>
+                <h2 className={`truncate text-lg font-extrabold ${data.diasAtraso > 0 ? "text-pf-danger" : "text-pf-text"}`}>{cliente!.nombre}</h2>
                 <p className="truncate text-xs text-pf-muted">{cliente!.identidad || "Sin identidad"}</p>
               </div>
-              {data.semanasAtraso > 0 ? (
+              {data.diasAtraso > 0 ? (
                 <span className="shrink-0 rounded-full bg-pf-danger-soft px-2.5 py-1 text-xs font-bold text-pf-danger">
-                  {data.semanasAtraso} {data.semanasAtraso === 1 ? "semana" : "semanas"} de atraso
+                  {data.diasAtraso} {data.diasAtraso === 1 ? "día" : "días"} de atraso
                 </span>
               ) : (
                 <span className="shrink-0 rounded-full bg-pf-success-soft px-2.5 py-1 text-xs font-bold text-pf-success">Al día</span>
@@ -169,17 +300,7 @@ export function CobranzaClientePage() {
               </p>
             ) : null}
 
-            <div className="rounded-2xl border border-pf-primary-soft bg-gradient-to-br from-pf-info-soft/55 via-pf-primary-soft/45 to-pf-warning-soft/45 p-4 shadow-sm">
-              <div className="space-y-2 text-sm">
-                <p className="flex justify-between gap-3 text-pf-text-secondary"><span>Saldo total</span><strong className="tabular-nums text-pf-text">{formatMoney("L", data.saldoTotal)}</strong></p>
-                <p className="flex justify-between gap-3 text-pf-text-secondary"><span>Atrasado</span><strong className="tabular-nums text-pf-danger">{formatMoney("L", data.atrasado)}</strong></p>
-                <p className="flex justify-between gap-3 text-pf-text-secondary"><span>Cuota del período</span><strong className="tabular-nums text-pf-text">{formatMoney("L", data.cuotaCorriente)}</strong></p>
-                <p className="flex items-end justify-between gap-3 border-t border-pf-border-soft pt-2">
-                  <span className="font-bold text-pf-text-secondary">Pago sugerido</span>
-                  <strong className="whitespace-nowrap text-xl font-extrabold tabular-nums text-pf-danger">{formatMoney("L", data.pagoSugerido)}</strong>
-                </p>
-              </div>
-            </div>
+            <SituacionCredito data={data} />
           </Card>
 
           <Card className="space-y-3 p-4 sm:p-5">
@@ -279,7 +400,7 @@ export function CobranzaClientePage() {
                 <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
                   <div><dt className="text-xs text-pf-muted">Saldo actual</dt><dd className="font-bold tabular-nums text-pf-text">{formatMoney("L", item.prestamo.saldo)}</dd></div>
                   <div><dt className="text-xs text-pf-muted">Pago requerido</dt><dd className="font-bold tabular-nums text-pf-danger">{formatMoney("L", item.atrasado)}</dd></div>
-                  <div><dt className="text-xs text-pf-muted">Cuota del período</dt><dd className="tabular-nums text-pf-text-secondary">{formatMoney("L", item.cuotaCorriente)}</dd></div>
+                  <div><dt className="text-xs text-pf-muted">Cuota de hoy</dt><dd className="tabular-nums text-pf-text-secondary">{formatMoney("L", item.cuotaCorriente)}</dd></div>
                   <div><dt className="text-xs text-pf-muted">Pagos realizados</dt><dd className="tabular-nums text-pf-text-secondary">{item.pagosRealizados} / {item.prestamo.plazo}</dd></div>
                   <div className="col-span-2"><dt className="text-xs text-pf-muted">Próxima fecha de pago</dt><dd className="text-pf-text-secondary">{item.proximaFecha ? formatDateOnly(item.proximaFecha) : "—"}</dd></div>
                 </dl>

@@ -23,6 +23,13 @@ function TicketRow({ label, children, strong = false }: { label: string; childre
   );
 }
 
+type ReceiptNavigationState = {
+  created?: boolean;
+  origen?: string;
+  pagoIds?: string[];
+  totalCobrado?: number;
+};
+
 export function PaymentReceiptPage() {
   const { paymentId = "" } = useParams<{ paymentId: string }>();
   const navigate = useNavigate();
@@ -35,8 +42,10 @@ export function PaymentReceiptPage() {
   const [imageErrorKey, setImageErrorKey] = useState("");
   const [sharing, setSharing] = useState(false);
   const [shareNotice, setShareNotice] = useState<{ tone: "info" | "success" | "danger"; text: string } | null>(null);
-  const [showCreated] = useState(() => Boolean((location.state as { created?: boolean } | null)?.created));
-  const [desdeCobranza] = useState(() => (location.state as { origen?: string } | null)?.origen === "cobranza");
+  const [navigationState] = useState<ReceiptNavigationState>(() => (location.state as ReceiptNavigationState | null) ?? {});
+  const showCreated = Boolean(navigationState.created);
+  const desdeCobranza = navigationState.origen === "cobranza";
+  const recibosCobranza = navigationState.pagoIds?.filter(Boolean) ?? [];
 
   const load = useCallback(async () => {
     if (!paymentId) return;
@@ -165,9 +174,41 @@ export function PaymentReceiptPage() {
     <div className="mx-auto max-w-md space-y-4 pf-safe-page print:max-w-none">
       {showCreated ? (
         <div className="rounded-xl border border-pf-success-soft bg-pf-success-soft/60 px-4 py-3 text-sm font-semibold text-pf-success" role="status">
-          <p className="flex items-center gap-2"><CheckCircle2 className="h-5 w-5" strokeWidth={2} aria-hidden />Pago registrado correctamente</p>
-          <p className="mt-1 pl-7 text-xs font-medium">Saldo a pagar: {formatMoney("L", detail.pago.saldo_posterior ?? detail.prestamo.saldo)}</p>
+          <p className="flex items-center gap-2"><CheckCircle2 className="h-5 w-5" strokeWidth={2} aria-hidden />{recibosCobranza.length > 1 ? "Cobro registrado correctamente" : "Pago registrado correctamente"}</p>
+          <p className="mt-1 pl-7 text-xs font-medium">
+            {recibosCobranza.length > 1 && navigationState.totalCobrado != null
+              ? `Total recibido: ${formatMoney("L", navigationState.totalCobrado)}`
+              : `Saldo a pagar: ${formatMoney("L", detail.pago.saldo_posterior ?? detail.prestamo.saldo)}`}
+          </p>
         </div>
+      ) : null}
+
+      {recibosCobranza.length > 1 ? (
+        <Card className="space-y-3 border-pf-info-soft bg-pf-info-soft/30 print:hidden">
+          <div>
+            <p className="text-sm font-black text-pf-text">Recibos de este cobro</p>
+            <p className="mt-1 text-xs font-medium leading-relaxed text-pf-muted">
+              El monto cubrió {recibosCobranza.length} préstamos. Se creó un comprobante por cada préstamo para conservar saldos e historial correctos.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {recibosCobranza.map((id, index) => {
+              const actual = id === paymentId;
+              return (
+                <Button
+                  key={id}
+                  type="button"
+                  variant={actual ? "secondary" : "ghost"}
+                  disabled={actual}
+                  onClick={() => navigate(`/pagos/${id}/recibo`, { state: navigationState })}
+                >
+                  <ReceiptText className="h-4 w-4" strokeWidth={2} aria-hidden />
+                  {actual ? `Viendo recibo ${index + 1}` : `Abrir recibo ${index + 1}`}
+                </Button>
+              );
+            })}
+          </div>
+        </Card>
       ) : null}
 
       <div className="space-y-2 print:hidden">

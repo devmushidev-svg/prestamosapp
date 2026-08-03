@@ -1,16 +1,26 @@
-import { AlertTriangle, CalendarClock, ChevronDown, ChevronUp, ExternalLink, MapPin, Navigation, Phone, Route, UserRound } from "lucide-react";
+import { AlertTriangle, CalendarClock, ChevronDown, ChevronUp, ExternalLink, MapPin, Navigation, Phone, Route, Search, UserRound } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PageHero } from "../components/PageHero";
-import { Button, Card, EmptyState, Field, Select } from "../components/ui";
+import { Button, Card, EmptyState, Field, Input, Select } from "../components/ui";
 import { getRutaCobro, guardarOrdenRuta, type ClienteRuta, type RutaCobro } from "../lib/cobranzaService";
 import { formatDateOnly, formatMoney } from "../lib/format";
 
-type Orden = "pago_sugerido" | "pago_requerido" | "semanas_atraso" | "colonia" | "manual";
+type Orden = "pago_sugerido" | "pago_requerido" | "dias_atraso" | "colonia" | "manual";
 type TabRuta = "pendientes" | "visitados";
+type ModoRuta = "sugerida" | "personalizada";
 
 const ORDEN_KEY = "multiprestamos.ruta-orden";
+const MODO_KEY = "multiprestamos.ruta-modo";
 const SIN_COLONIA = "__sin_colonia__";
+
+function normalizeSearch(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("es-HN")
+    .trim();
+}
 
 function coloniaKey(cliente: ClienteRuta): string {
   const value = cliente.cliente.colonia?.trim();
@@ -24,8 +34,8 @@ function sortClientes(items: ClienteRuta[], orden: Orden): ClienteRuta[] {
       return sorted.sort((a, b) => b.pagoSugerido - a.pagoSugerido || a.cliente.nombre.localeCompare(b.cliente.nombre, "es-HN"));
     case "pago_requerido":
       return sorted.sort((a, b) => b.pagoRequerido - a.pagoRequerido || a.cliente.nombre.localeCompare(b.cliente.nombre, "es-HN"));
-    case "semanas_atraso":
-      return sorted.sort((a, b) => b.semanasAtraso - a.semanasAtraso || b.pagoSugerido - a.pagoSugerido);
+    case "dias_atraso":
+      return sorted.sort((a, b) => b.diasAtraso - a.diasAtraso || b.pagoSugerido - a.pagoSugerido);
     case "colonia":
       return sorted.sort((a, b) => {
         const ca = a.cliente.colonia?.trim() ?? "";
@@ -47,10 +57,13 @@ export function RutaCobroPage() {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TabRuta>("pendientes");
+  const [search, setSearch] = useState("");
+  const [modo, setModo] = useState<ModoRuta>(() => localStorage.getItem(MODO_KEY) === "personalizada" ? "personalizada" : "sugerida");
   const [colonia, setColonia] = useState("");
   const [orden, setOrdenState] = useState<Orden>(() => {
     const saved = localStorage.getItem(ORDEN_KEY);
-    return saved === "pago_requerido" || saved === "semanas_atraso" || saved === "colonia" || saved === "manual"
+    if (saved === "semanas_atraso") return "dias_atraso";
+    return saved === "pago_requerido" || saved === "dias_atraso" || saved === "colonia" || saved === "manual"
       ? saved
       : "pago_sugerido";
   });
@@ -88,38 +101,68 @@ export function RutaCobroPage() {
       .sort((a, b) => (a.key === SIN_COLONIA ? 1 : b.key === SIN_COLONIA ? -1 : a.label.localeCompare(b.label, "es-HN")));
   }, [clientes]);
 
+  const encontrados = useMemo(() => {
+    const term = normalizeSearch(search);
+    if (!term) return clientes;
+    return clientes.filter((item) => normalizeSearch([
+      item.cliente.nombre,
+      item.cliente.identidad,
+      item.cliente.telefono,
+      item.cliente.direccion,
+      item.cliente.colonia,
+    ].filter(Boolean).join(" ")).includes(term));
+  }, [clientes, search]);
   const filtrados = useMemo(
-    () => (colonia ? clientes.filter((item) => coloniaKey(item) === colonia) : clientes),
-    [clientes, colonia]
+    () => (modo === "personalizada" && colonia
+      ? encontrados.filter((item) => coloniaKey(item) === colonia)
+      : encontrados),
+    [colonia, encontrados, modo]
   );
-  const pendientes = useMemo(() => sortClientes(filtrados.filter((item) => !item.visitadoHoy), orden), [filtrados, orden]);
-  const visitados = useMemo(() => sortClientes(filtrados.filter((item) => item.visitadoHoy), orden), [filtrados, orden]);
+  const ordenEfectivo: Orden = modo === "sugerida" ? "pago_sugerido" : orden;
+  const pendientes = useMemo(() => sortClientes(filtrados.filter((item) => !item.visitadoHoy), ordenEfectivo), [filtrados, ordenEfectivo]);
+  const visitados = useMemo(() => sortClientes(filtrados.filter((item) => item.visitadoHoy), ordenEfectivo), [filtrados, ordenEfectivo]);
   const visible = tab === "pendientes" ? pendientes : visitados;
   const porCobrarHoy = useMemo(
     () => clientes.filter((item) => !item.visitadoHoy).reduce((s, item) => s + item.pagoSugerido, 0),
     [clientes]
   );
   const rutaMaps = useMemo(() => {
-    const paradas = pendientes
-      .filter((item) => item.cliente.direccion?.trim())
+    const clientesConDireccion = pendientes.filter((item) => item.cliente.direccion?.trim());
+    const paradas = clientesConDireccion
       .slice(0, 9)
       .map((item) => [item.cliente.direccion, item.cliente.colonia && `Colonia ${item.cliente.colonia}`, "Honduras"].filter(Boolean).join(", "));
-    if (!paradas.length) return { url: "", total: 0 };
+    if (!paradas.length) return { url: "", total: 0, limitado: false };
     const destination = paradas[paradas.length - 1];
     const params = new URLSearchParams({ api: "1", destination, travelmode: "driving" });
     if (paradas.length > 1) params.set("waypoints", paradas.slice(0, -1).join("|"));
-    return { url: `https://www.google.com/maps/dir/?${params.toString()}`, total: paradas.length };
+    return {
+      url: `https://www.google.com/maps/dir/?${params.toString()}`,
+      total: paradas.length,
+      limitado: clientesConDireccion.length > paradas.length,
+    };
   }, [pendientes]);
+
+  async function cambiarModo(next: ModoRuta) {
+    setModo(next);
+    localStorage.setItem(MODO_KEY, next);
+    if (next === "personalizada" && orden === "manual") await setOrden("manual");
+  }
 
   async function setOrden(next: Orden) {
     const previo = orden;
     setOrdenState(next);
     localStorage.setItem(ORDEN_KEY, next);
     if (next !== "manual" || !data) return;
-    // Primera activación: congela el orden visible actual como punto de partida.
-    if (!clientes.some((item) => item.cliente.orden_ruta == null)) return;
-    const base = sortClientes(clientes, previo === "manual" ? "pago_sugerido" : previo);
-    const items = base.map((item, index) => ({ id: item.cliente.id, orden_ruta: index }));
+    // Conserva las posiciones personalizadas existentes. Los clientes nuevos
+    // se agregan al final para que nunca borren el recorrido que ya se ordenó.
+    const sinOrden = clientes.filter((item) => item.cliente.orden_ruta == null);
+    if (!sinOrden.length) return;
+    const ultimoOrden = clientes.reduce(
+      (maximo, item) => Math.max(maximo, item.cliente.orden_ruta ?? -1),
+      -1,
+    );
+    const base = sortClientes(sinOrden, previo === "manual" ? "pago_sugerido" : previo);
+    const items = base.map((item, index) => ({ id: item.cliente.id, orden_ruta: ultimoOrden + index + 1 }));
     try {
       setMovingId("__all__");
       await guardarOrdenRuta(items);
@@ -172,7 +215,7 @@ export function RutaCobroPage() {
     <div className="space-y-4 pf-safe-page">
       <PageHero title="Ruta de cobro" constrained>
         <p className="pf-page-lead max-w-2xl">Clientes con cobro pendiente, listos para la visita del día.</p>
-        <p className="pf-page-lead-muted">El pago sugerido suma lo atrasado más la cuota del período.</p>
+        <p className="pf-page-lead-muted">El pago sugerido suma lo atrasado y la cuota que vence hoy.</p>
       </PageHero>
 
       {data?.migracionPendiente ? (
@@ -194,24 +237,93 @@ export function RutaCobroPage() {
       ) : (
         <div className="mx-auto w-full max-w-3xl space-y-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="pf-filter-chip">TODOS ({clientes.length})</span>
+            <span className="pf-filter-chip">Clientes ({clientes.length})</span>
+            {(search.trim() || (modo === "personalizada" && colonia)) ? (
+              <span className="pf-filter-chip">Mostrando: <strong className="ml-1 tabular-nums">{filtrados.length}</strong></span>
+            ) : null}
             <span className="pf-filter-chip">Por cobrar hoy: <strong className="ml-1 tabular-nums">{formatMoney("L", porCobrarHoy)}</strong></span>
           </div>
 
-          {rutaMaps.url && tab === "pendientes" ? (
-            <a
-              href={rutaMaps.url}
-              target="_blank"
-              rel="noreferrer"
-              className="pf-btn-primary-gradient inline-flex min-h-[50px] w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pf-primary"
-            >
-              <Navigation className="h-5 w-5" strokeWidth={2} aria-hidden />
-              Abrir ruta en Maps ({rutaMaps.total} {rutaMaps.total === 1 ? "parada" : "paradas"})
-              <ExternalLink className="h-4 w-4" strokeWidth={2} aria-hidden />
-            </a>
-          ) : null}
+          <Card className="space-y-4 p-3 sm:p-4">
+            <div>
+              <p className="text-sm font-extrabold text-pf-text">¿Cómo quiere organizar las visitas?</p>
+              <p className="mt-0.5 text-xs text-pf-muted">Puede seguir la prioridad automática o preparar su propio recorrido.</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Modo de la ruta de cobro">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={modo === "sugerida"}
+                className={`flex min-h-[72px] items-center gap-3 rounded-xl border p-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pf-primary ${modo === "sugerida" ? "border-pf-primary bg-pf-primary-soft text-pf-primary-hover" : "border-pf-border-soft bg-pf-surface text-pf-text hover:bg-pf-surface-muted"}`}
+                onClick={() => void cambiarModo("sugerida")}
+              >
+                <span className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${modo === "sugerida" ? "bg-pf-primary text-white" : "bg-pf-primary-soft text-pf-primary-hover"}`}>
+                  <Navigation className="h-5 w-5" strokeWidth={2} aria-hidden />
+                </span>
+                <span>
+                  <span className="block text-sm font-extrabold">Ruta sugerida</span>
+                  <span className="mt-0.5 block text-xs opacity-80">Prioriza automáticamente el mayor pago sugerido.</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={modo === "personalizada"}
+                className={`flex min-h-[72px] items-center gap-3 rounded-xl border p-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pf-primary ${modo === "personalizada" ? "border-pf-primary bg-pf-primary-soft text-pf-primary-hover" : "border-pf-border-soft bg-pf-surface text-pf-text hover:bg-pf-surface-muted"}`}
+                onClick={() => void cambiarModo("personalizada")}
+              >
+                <span className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${modo === "personalizada" ? "bg-pf-primary text-white" : "bg-pf-primary-soft text-pf-primary-hover"}`}>
+                  <MapPin className="h-5 w-5" strokeWidth={2} aria-hidden />
+                </span>
+                <span>
+                  <span className="block text-sm font-extrabold">Ruta personalizada</span>
+                  <span className="mt-0.5 block text-xs opacity-80">Filtre por colonia y elija el orden del recorrido.</span>
+                </span>
+              </button>
+            </div>
 
-          <Card className="space-y-3 p-3 sm:p-4">
+            <Field label="Buscar cliente en la ruta" htmlFor="ruta-search" compact>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-pf-muted" strokeWidth={2} aria-hidden />
+                <Input
+                  id="ruta-search"
+                  className="pl-10"
+                  type="search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Nombre, DNI, teléfono, dirección o colonia…"
+                  autoComplete="off"
+                />
+              </div>
+            </Field>
+
+            {modo === "sugerida" ? (
+              <div className="flex items-start gap-2 rounded-xl border border-pf-primary-soft bg-pf-primary-soft/45 px-3 py-2.5 text-xs text-pf-text-secondary">
+                <Navigation className="mt-0.5 h-4 w-4 shrink-0 text-pf-primary" strokeWidth={2} aria-hidden />
+                <p><strong className="text-pf-text">Orden automático activo:</strong> primero verá a quienes tienen el pago sugerido más alto.</p>
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Colonia" htmlFor="ruta-colonia" compact>
+                  <Select id="ruta-colonia" value={colonia} onChange={(event) => setColonia(event.target.value)}>
+                    <option value="">Todas las colonias ({clientes.length})</option>
+                    {colonias.map((item) => (
+                      <option key={item.key} value={item.key}>{item.label} ({item.total})</option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Ordenar resultados por" htmlFor="ruta-orden" compact>
+                  <Select id="ruta-orden" value={orden} onChange={(event) => void setOrden(event.target.value as Orden)} disabled={movingId === "__all__"}>
+                    <option value="pago_sugerido">Pago sugerido</option>
+                    <option value="pago_requerido">Pago requerido</option>
+                    <option value="dias_atraso">Días de atraso</option>
+                    <option value="colonia">Colonia</option>
+                    <option value="manual">Orden manual</option>
+                  </Select>
+                </Field>
+              </div>
+            )}
+
             <div className="pf-settings-tabs-nav" role="tablist" aria-label="Estado de visita">
               <button
                 type="button"
@@ -232,35 +344,41 @@ export function RutaCobroPage() {
                 Visitados ({visitados.length})
               </button>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Colonia" htmlFor="ruta-colonia" compact>
-                <Select id="ruta-colonia" value={colonia} onChange={(event) => setColonia(event.target.value)}>
-                  <option value="">Todas las colonias ({clientes.length})</option>
-                  {colonias.map((item) => (
-                    <option key={item.key} value={item.key}>{item.label} ({item.total})</option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Ordenar resultados por" htmlFor="ruta-orden" compact>
-                <Select id="ruta-orden" value={orden} onChange={(event) => void setOrden(event.target.value as Orden)} disabled={movingId === "__all__"}>
-                  <option value="pago_sugerido">Pago sugerido</option>
-                  <option value="pago_requerido">Pago requerido</option>
-                  <option value="semanas_atraso">Semanas de atraso</option>
-                  <option value="colonia">Colonia</option>
-                  <option value="manual">Orden manual</option>
-                </Select>
-              </Field>
-            </div>
           </Card>
+
+          {rutaMaps.url && tab === "pendientes" ? (
+            <a
+              href={rutaMaps.url}
+              target="_blank"
+              rel="noreferrer"
+              className="pf-btn-primary-gradient inline-flex min-h-[50px] w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-bold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pf-primary"
+            >
+              <Navigation className="h-5 w-5" strokeWidth={2} aria-hidden />
+              {rutaMaps.limitado
+                ? `Abrir primeras ${rutaMaps.total} paradas en Maps`
+                : `Abrir ruta en Maps (${rutaMaps.total} ${rutaMaps.total === 1 ? "parada" : "paradas"})`}
+              <ExternalLink className="h-4 w-4" strokeWidth={2} aria-hidden />
+            </a>
+          ) : null}
 
           {err ? <p className="text-sm font-medium text-pf-danger" role="alert">{err}</p> : null}
 
           {visible.length === 0 ? (
-            <Card><EmptyState title={tab === "pendientes" ? "Sin visitas pendientes" : "Aún no hay visitados hoy"} description={tab === "pendientes" ? "Todos los clientes de este filtro ya fueron visitados hoy." : "Los clientes con pago o gestión registrada hoy aparecerán aquí."} icon={<Route className="h-5 w-5" strokeWidth={2} aria-hidden />} /></Card>
+            <Card>
+              <EmptyState
+                title={search.trim() ? "No encontramos clientes" : tab === "pendientes" ? "Sin visitas pendientes" : "Aún no hay visitados hoy"}
+                description={search.trim()
+                  ? "Pruebe con otro nombre, DNI, teléfono, dirección o colonia."
+                  : tab === "pendientes"
+                    ? "Todos los clientes de este filtro ya fueron visitados hoy."
+                    : "Los clientes con pago o gestión registrada hoy aparecerán aquí."}
+                icon={search.trim() ? <Search className="h-5 w-5" strokeWidth={2} aria-hidden /> : <Route className="h-5 w-5" strokeWidth={2} aria-hidden />}
+              />
+            </Card>
           ) : (
             <div className="space-y-2 pf-stagger">
               {visible.map((item, index) => {
-                const moroso = item.semanasAtraso > 0;
+                const moroso = item.diasAtraso > 0;
                 return (
                   <Card key={item.cliente.id} className="overflow-hidden p-0">
                     <div className="flex items-stretch">
@@ -299,7 +417,7 @@ export function RutaCobroPage() {
                             </span>
                             {moroso ? (
                               <span className="rounded-full bg-pf-danger-soft px-2.5 py-1 text-xs font-bold text-pf-danger">
-                                {item.semanasAtraso} {item.semanasAtraso === 1 ? "semana" : "semanas"} de atraso
+                                {item.diasAtraso} {item.diasAtraso === 1 ? "día" : "días"} de atraso
                               </span>
                             ) : (
                               <span className="rounded-full bg-pf-success-soft px-2.5 py-1 text-xs font-bold text-pf-success">Al día</span>
@@ -308,7 +426,7 @@ export function RutaCobroPage() {
                         </span>
                       </button>
                       <div className="flex flex-col items-center justify-center gap-1 border-l border-pf-border-soft px-2 py-2">
-                        {orden === "manual" ? (
+                        {modo === "personalizada" && orden === "manual" ? (
                           <>
                             <Button type="button" variant="ghost" className="min-h-0 rounded-lg p-2" aria-label={`Subir a ${item.cliente.nombre}`} disabled={index === 0 || Boolean(movingId)} onClick={() => void mover(index, -1)}>
                               <ChevronUp className="h-5 w-5" strokeWidth={2} aria-hidden />
