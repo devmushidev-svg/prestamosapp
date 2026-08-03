@@ -104,7 +104,10 @@ export function CobranzaAbonoPage() {
       // Bitácora de la visita. Si falla no se bloquea el cobro: "visitado hoy"
       // también se deduce de los pagos del día.
       await registrarGestion({ clienteId, resultado: "pago", pagoId: pagoIds[0] }).catch(() => {});
-      navigate(`/pagos/${pagoIds[0]}/recibo`, { replace: true, state: { created: true, origen: "cobranza" } });
+      navigate(`/pagos/${pagoIds[0]}/recibo`, {
+        replace: true,
+        state: { created: true, origen: "cobranza", pagoIds, totalCobrado: monto },
+      });
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "";
       setErr(
@@ -160,8 +163,8 @@ export function CobranzaAbonoPage() {
               </span>
               <span className="mt-3 block space-y-1 border-t border-pf-border-soft pt-2.5 text-xs text-pf-text-secondary">
                 <span className="flex justify-between gap-3"><span>Atrasado</span><strong className="tabular-nums">{formatMoney("L", data.atrasado)}</strong></span>
-                <span className="flex justify-between gap-3"><span>Moratorios</span><strong className="tabular-nums">{formatMoney("L", data.moratorios)}</strong></span>
-                <span className="flex justify-between gap-3"><span>Cuota del período</span><strong className="tabular-nums">{formatMoney("L", data.cuotaCorriente)}</strong></span>
+                <span className="flex justify-between gap-3"><span>Mora monetaria</span><strong className="text-pf-muted">No aplicada</strong></span>
+                <span className="flex justify-between gap-3"><span>Cuota de hoy</span><strong className="tabular-nums">{formatMoney("L", data.cuotaCorriente)}</strong></span>
               </span>
             </button>
 
@@ -173,7 +176,7 @@ export function CobranzaAbonoPage() {
                 </span>
                 <span className="mt-3 block space-y-1 border-t border-pf-border-soft pt-2.5 text-xs text-pf-text-secondary">
                   <span className="flex justify-between gap-3"><span>Atrasado</span><strong className="tabular-nums">{formatMoney("L", data.atrasado)}</strong></span>
-                  <span className="flex justify-between gap-3"><span>Moratorios</span><strong className="tabular-nums">{formatMoney("L", data.moratorios)}</strong></span>
+                  <span className="flex justify-between gap-3"><span>Mora monetaria</span><strong className="text-pf-muted">No aplicada</strong></span>
                 </span>
               </button>
             ) : null}
