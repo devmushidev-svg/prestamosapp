@@ -18,9 +18,10 @@ const EMPTY_FORM: ConfiguracionPrestamistaInput = {
 function ReceiptPreview({ form, setup }: { form: ConfiguracionPrestamistaInput; setup: boolean }) {
   return (
     <Card className={`h-fit min-w-0 space-y-4 border-white/60 bg-white/95 p-5 shadow-lg lg:sticky ${setup ? "lg:top-16" : "lg:top-[11.5rem]"}`}>
+      {/* La tarjeta simula papel (blanca en todos los temas): colores fijos, no tokens. */}
       <div>
-        <p className="text-xs font-bold uppercase tracking-widest text-pf-muted">Vista previa</p>
-        <h2 className="mt-1 font-extrabold text-pf-text">Así se verá en el recibo</h2>
+        <p className="text-xs font-bold uppercase tracking-widest text-stone-500">Vista previa</p>
+        <h2 className="mt-1 font-extrabold text-stone-900">Así se verá en el recibo</h2>
       </div>
       <div className="mx-auto w-full max-w-[320px] rounded-xl border border-dashed border-pf-border bg-white px-5 py-6 font-mono text-[11px] leading-relaxed text-stone-800 shadow-sm">
         <div className="border-b border-dashed border-stone-300 pb-3 text-center">
@@ -42,7 +43,7 @@ function ReceiptPreview({ form, setup }: { form: ConfiguracionPrestamistaInput; 
           <p className="mt-3">Gracias por su pago</p>
         </div>
       </div>
-      <div className="rounded-xl border border-pf-info-soft bg-pf-info-soft/35 px-3 py-2.5 text-xs text-pf-text-secondary">
+      <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-xs text-stone-700">
         Moneda: Lempira (L) · Formato: Honduras
       </div>
     </Card>
@@ -139,7 +140,7 @@ function ConfigContent({ setup }: { setup: boolean }) {
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)] lg:items-start">
-        <Card className="border-white/50 bg-gradient-to-br from-white/95 via-orange-50/10 to-sky-50/20 p-4 shadow-lg backdrop-blur-sm sm:p-5">
+        <Card className="border-[color:var(--pf-glass-border)] bg-gradient-to-br from-[color:var(--pf-hero-bg-1)] via-transparent to-[color:var(--pf-hero-bg-2)] p-4 shadow-lg backdrop-blur-sm sm:p-5">
           <div className="mb-5 flex items-center gap-3 border-b border-pf-border-soft pb-3">
             <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-pf-primary-soft text-pf-primary-hover">
               <Building2 className="h-5 w-5" strokeWidth={2} aria-hidden />

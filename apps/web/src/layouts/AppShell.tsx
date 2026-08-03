@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Banknote, BarChart3, Building2, CalendarClock, ChevronDown, FileClock, FilePlus2, HandCoins, Home, LogOut, Menu, Settings2, User, Users, Wallet, X } from "lucide-react";
+import { Banknote, BarChart3, Building2, CalendarClock, ChevronDown, FileClock, FilePlus2, HandCoins, Home, LogOut, Menu, Palette, Route, Settings, Settings2, User, Users, Wallet, X } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { useBusinessConfig } from "../business/BusinessConfigContext";
@@ -14,7 +14,7 @@ type NavItem = {
   end?: boolean;
 };
 
-type TabId = "inicio" | "cartera" | "empresa";
+type TabId = "inicio" | "cartera" | "empresa" | "ajustes";
 
 type RibbonGroupDef = { title: string; items: NavItem[] };
 
@@ -22,12 +22,17 @@ const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: "inicio", label: "Inicio", icon: Home },
   { id: "cartera", label: "Cartera", icon: Wallet },
   { id: "empresa", label: "Empresa", icon: Building2 },
+  { id: "ajustes", label: "Configuraciones", icon: Settings },
 ];
 
 /** Cinta agrupada (estilo ERP). Las fichas de préstamos, pagos y reportes se agregan aquí conforme avanza el MVP. */
 const RIBBON: Record<TabId, RibbonGroupDef[]> = {
   inicio: [],
   cartera: [
+    {
+      title: "Cobranza",
+      items: [{ to: "/cobranza", label: "Ruta de cobro", icon: Route, end: true }],
+    },
     {
       title: "Préstamos",
       items: [
@@ -55,22 +60,31 @@ const RIBBON: Record<TabId, RibbonGroupDef[]> = {
       items: [{ to: "/configuracion", label: "Datos del prestamista", icon: Settings2 }],
     },
   ],
+  ajustes: [
+    {
+      title: "Preferencias",
+      items: [{ to: "/ajustes", label: "Apariencia y temas", icon: Palette, end: true }],
+    },
+  ],
 };
 
 const TAB_DEFAULT_PATH: Record<TabId, string> = {
   inicio: "/",
   cartera: "/prestamos",
   empresa: "/configuracion",
+  ajustes: "/ajustes",
 };
 
 function tabFromPath(pathname: string): TabId {
   if (pathname === "/") return "inicio";
   if (/^\/configuracion(\/|$)/.test(pathname)) return "empresa";
+  if (/^\/ajustes(\/|$)/.test(pathname)) return "ajustes";
   return "cartera";
 }
 
 const MOBILE_QUICK_ITEMS: NavItem[] = [
   { to: "/", label: "Panel", icon: Home, end: true },
+  { to: "/cobranza", label: "Ruta de cobro", icon: Route, end: true },
 ];
 
 function primaryTabButtonClasses(isActive: boolean) {
@@ -146,6 +160,7 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
     inicio: false,
     cartera: activeSection === "cartera",
     empresa: activeSection === "empresa",
+    ajustes: activeSection === "ajustes",
   }));
 
   return (
@@ -238,6 +253,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
 
   useEffect(() => {
     setActiveTab(tabFromPath(location.pathname));
+    window.scrollTo(0, 0);
   }, [location.pathname]);
 
   useEffect(() => {
@@ -328,7 +344,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
         <div className="fixed inset-0 z-40 md:hidden">
           <button
             type="button"
-            className="pf-mobile-menu-scrim absolute inset-0"
+            className="pf-mobile-menu-scrim pf-modal-scrim-enter absolute inset-0"
             aria-label="Cerrar menú"
             onClick={() => setMenuOpen(false)}
           />
@@ -338,7 +354,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
             role="dialog"
             aria-modal="true"
             aria-label="Menú principal"
-            className="pf-mobile-drawer-shell absolute right-0 top-0 flex h-full w-[min(94vw,380px)] flex-col pt-[env(safe-area-inset-top)]"
+            className="pf-mobile-drawer-shell pf-drawer-enter absolute right-0 top-0 flex h-full w-[min(94vw,380px)] flex-col pt-[env(safe-area-inset-top)]"
           >
             <div className="pf-mobile-drawer-head flex items-center justify-between px-4 py-3.5 backdrop-blur-md">
               <div className="min-w-0">
@@ -442,7 +458,10 @@ export function AppShell({ children }: { children?: ReactNode }) {
       </header>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <main className="flex-1 min-w-0 px-4 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] md:px-6 md:py-6 md:pb-6">
+        <main
+          key={location.pathname}
+          className="pf-page-enter flex-1 min-w-0 px-4 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] md:px-6 md:py-6 md:pb-6"
+        >
           {children ?? <Outlet />}
         </main>
       </div>

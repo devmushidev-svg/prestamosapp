@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, Banknote, BarChart3, CalendarClock, CalendarDays, CheckCircle2, FilePlus2, HandCoins, Landmark, TrendingUp, Users, WalletCards } from "lucide-react";
+import { AlertTriangle, ArrowRight, Banknote, BarChart3, CalendarClock, CalendarDays, CheckCircle2, FilePlus2, HandCoins, Landmark, Route, TrendingUp, Users, WalletCards } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
@@ -300,7 +300,7 @@ export function DashboardPage() {
       ) : kpis === null ? (
         <Card className="pf-glass-card-panel p-8 text-center text-sm text-pf-muted">Cargando…</Card>
       ) : (
-        <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 xl:grid-cols-3">
+        <div className="pf-stagger grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 xl:grid-cols-3">
           <KpiCard
             label="Clientes activos"
             value={String(kpis.clientesActivos)}
@@ -371,8 +371,9 @@ export function DashboardPage() {
       {/* Acceso rápido */}
       <div>
         <p className="mb-3 text-xs font-bold uppercase tracking-widest text-pf-muted">Acceso rápido</p>
-        <div className="grid max-w-5xl grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <div className="grid max-w-5xl grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
           {[
+            { to: "/cobranza", label: "Ruta de cobro", icon: Route, primary: true },
             { to: "/prestamos/nuevo", label: "Nuevo préstamo", icon: FilePlus2, primary: true },
             { to: "/pagos/nuevo", label: "Registrar pago", icon: Banknote, primary: false },
             { to: "/agenda", label: "Agenda", icon: CalendarClock, primary: false },

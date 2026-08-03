@@ -36,6 +36,7 @@ export function PaymentReceiptPage() {
   const [sharing, setSharing] = useState(false);
   const [shareNotice, setShareNotice] = useState<{ tone: "info" | "success" | "danger"; text: string } | null>(null);
   const [showCreated] = useState(() => Boolean((location.state as { created?: boolean } | null)?.created));
+  const [desdeCobranza] = useState(() => (location.state as { origen?: string } | null)?.origen === "cobranza");
 
   const load = useCallback(async () => {
     if (!paymentId) return;
@@ -174,7 +175,7 @@ export function PaymentReceiptPage() {
           <Button type="button" className="min-h-[52px] sm:col-span-2" onClick={() => emitirRecibo(receiptData)}><Printer className="h-5 w-5" strokeWidth={2} aria-hidden />Imprimir / guardar PDF</Button>
           <Button type="button" variant="secondary" disabled={sharing || preparingImage} onClick={() => void handleShareReceipt()}><ImageIcon className="h-4 w-4" strokeWidth={2} aria-hidden />{preparingImage ? "Preparando imagen…" : sharing ? "Compartiendo…" : "Compartir imagen"}</Button>
           <Button type="button" variant="secondary" onClick={() => navigate(`/pagos/nuevo?prestamoId=${encodeURIComponent(detail.prestamo.id)}`)}><Plus className="h-4 w-4" strokeWidth={2} aria-hidden />Registrar otro pago</Button>
-          <Button type="button" variant="ghost" className="sm:col-span-2" onClick={() => navigate(`/prestamos/${detail.prestamo.id}`)}><ArrowLeft className="h-4 w-4" strokeWidth={2} aria-hidden />Volver al préstamo</Button>
+          <Button type="button" variant="ghost" className="sm:col-span-2" onClick={() => navigate(desdeCobranza ? "/cobranza" : `/prestamos/${detail.prestamo.id}`)}><ArrowLeft className="h-4 w-4" strokeWidth={2} aria-hidden />{desdeCobranza ? "Volver a la ruta" : "Volver al préstamo"}</Button>
         </div>
         {shareNotice ? (
           <p

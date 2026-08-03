@@ -44,12 +44,13 @@ type RawStatementLoan = Prestamo & {
   pagos: Pago[] | null;
 };
 
-const CUSTOMER_SELECT = "id,nombre,identidad,telefono,direccion,lugar_trabajo,referencias,estado,notas,creado_en";
+const CUSTOMER_SELECT = "id,nombre,identidad,telefono,direccion,colonia,lugar_trabajo,referencias,foto_fachada_path,estado,notas,orden_ruta,creado_en";
+const EXTENDED_CUSTOMER_SELECT = "id,nombre,identidad,telefono,direccion,colonia,lugar_trabajo,referencias,estado,notas,orden_ruta,creado_en";
 const LEGACY_CUSTOMER_SELECT = "id,nombre,identidad,telefono,direccion,notas,creado_en";
 
 function isMissingExtendedCustomerColumns(error: { code?: string; message?: string }) {
   return error.code === "PGRST204" || error.code === "42703" ||
-    Boolean(error.message?.includes("lugar_trabajo") || error.message?.includes("referencias") || error.message?.includes("estado"));
+    Boolean(error.message?.includes("lugar_trabajo") || error.message?.includes("referencias") || error.message?.includes("foto_fachada_path") || error.message?.includes("estado") || error.message?.includes("colonia") || error.message?.includes("orden_ruta"));
 }
 
 function normalizeCustomer(row: Partial<Cliente> & Pick<Cliente, "id" | "nombre" | "creado_en">): Cliente {
@@ -59,10 +60,13 @@ function normalizeCustomer(row: Partial<Cliente> & Pick<Cliente, "id" | "nombre"
     identidad: row.identidad ?? null,
     telefono: row.telefono ?? null,
     direccion: row.direccion ?? null,
+    colonia: row.colonia ?? null,
     lugar_trabajo: row.lugar_trabajo ?? null,
     referencias: row.referencias ?? null,
+    foto_fachada_path: row.foto_fachada_path ?? null,
     estado: row.estado ?? "activo",
     notas: row.notas ?? null,
+    orden_ruta: row.orden_ruta ?? null,
     creado_en: row.creado_en,
   };
 }
@@ -71,6 +75,10 @@ async function getCustomer(clienteId: string): Promise<Cliente> {
   const current = await supabase.from("clientes").select(CUSTOMER_SELECT).eq("id", clienteId).single();
   if (!current.error) return normalizeCustomer(current.data as Cliente);
   if (!isMissingExtendedCustomerColumns(current.error)) throw current.error;
+
+  const extended = await supabase.from("clientes").select(EXTENDED_CUSTOMER_SELECT).eq("id", clienteId).single();
+  if (!extended.error) return normalizeCustomer(extended.data as Cliente);
+  if (!isMissingExtendedCustomerColumns(extended.error)) throw extended.error;
 
   const legacy = await supabase.from("clientes").select(LEGACY_CUSTOMER_SELECT).eq("id", clienteId).single();
   if (legacy.error) throw legacy.error;

@@ -256,7 +256,7 @@ export function Modal({
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center p-0 sm:p-4">
       <button
         type="button"
-        className="absolute inset-0 bg-gradient-to-t from-[var(--pf-modal-scrim-from)] via-[var(--pf-modal-scrim-via)] to-[var(--pf-modal-scrim-to)] backdrop-blur-md"
+        className="pf-modal-scrim-enter absolute inset-0 bg-gradient-to-t from-[var(--pf-modal-scrim-from)] via-[var(--pf-modal-scrim-via)] to-[var(--pf-modal-scrim-to)] backdrop-blur-md"
         aria-label="Cerrar"
         onClick={onClose}
       />
@@ -265,7 +265,7 @@ export function Modal({
         role="dialog"
         aria-modal
         aria-labelledby="modal-title"
-        className={`relative z-10 max-h-[90vh] w-full overflow-y-auto rounded-t-3xl border border-[var(--pf-glass-border)] bg-[color:var(--pf-surface-overlay)] shadow-[var(--pf-shadow-warm-xl)] backdrop-blur-xl sm:rounded-2xl md:border-pf-border md:bg-pf-surface-elevated md:backdrop-blur-none md:shadow-xl ${widthCls}`}
+        className={`pf-modal-panel-enter relative z-10 max-h-[90vh] w-full overflow-y-auto rounded-t-3xl border border-[var(--pf-glass-border)] bg-[color:var(--pf-surface-overlay)] shadow-[var(--pf-shadow-warm-xl)] backdrop-blur-xl sm:rounded-2xl md:border-pf-border md:bg-pf-surface-elevated md:backdrop-blur-none md:shadow-xl ${widthCls}`}
       >
         <div className="sticky top-0 flex items-center justify-between border-b border-[var(--pf-border-soft)] bg-gradient-to-r from-[color:var(--pf-surface-elevated)] to-[color:var(--pf-primary-soft)]/25 px-4 py-3 backdrop-blur-md md:from-pf-surface-elevated md:to-pf-surface-elevated md:backdrop-blur-none">
           <h2 id="modal-title" className="text-lg font-semibold text-pf-text">
