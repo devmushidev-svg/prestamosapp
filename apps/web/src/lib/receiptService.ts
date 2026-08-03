@@ -2,9 +2,35 @@
  * Único punto de emisión y compartido de recibos. Al pasar a la versión
  * nativa solo cambia este módulo; las pantallas siguen llamando emitirRecibo.
  */
-import type { ReciboSnapshot } from "../types";
+import type { EstadoPrestamo, ReciboSnapshot } from "../types";
 
 export type DatosRecibo = ReciboSnapshot;
+
+export type ParteComprobanteCobro = {
+  pagoId: string;
+  numeroRecibo: string;
+  numeroPrestamo: string;
+  monto: number;
+  saldoAnterior: number | null;
+  saldoRestante: number | null;
+  estadoCredito?: EstadoPrestamo;
+  tasaMora?: number;
+  aplicaciones: ReciboSnapshot["aplicaciones"];
+};
+
+export type DatosComprobanteCobro = {
+  tipo: "cobro_cliente";
+  fecha: string;
+  clienteNombre: string;
+  clienteIdentidad?: string | null;
+  negocio: ReciboSnapshot["negocio"];
+  montoTotal: number;
+  saldoClienteAnterior: number;
+  saldoClienteRestante: number;
+  recibos: ParteComprobanteCobro[];
+};
+
+export type DatosEmitibles = DatosRecibo | DatosComprobanteCobro;
 
 export type ResultadoCompartirRecibo =
   | { estado: "compartido"; nombreArchivo: string }
@@ -34,7 +60,7 @@ function receiptDate(value: string) {
   });
 }
 
-const CREDIT_STATUS_LABELS: Record<NonNullable<DatosRecibo["estadoCredito"]>, string> = {
+const CREDIT_STATUS_LABELS: Record<EstadoPrestamo, string> = {
   activo: "Activo",
   al_dia: "Al día",
   en_mora: "En mora",
@@ -42,7 +68,7 @@ const CREDIT_STATUS_LABELS: Record<NonNullable<DatosRecibo["estadoCredito"]>, st
   cancelado: "Cancelado",
 };
 
-export function getCreditStatusLabel(status: DatosRecibo["estadoCredito"]) {
+export function getCreditStatusLabel(status: EstadoPrestamo | null | undefined) {
   return status ? CREDIT_STATUS_LABELS[status] ?? "No disponible" : "No disponible";
 }
 
@@ -51,7 +77,11 @@ export function formatReceiptRate(value: number | null | undefined) {
   return `${Number(value).toLocaleString("es-HN", { maximumFractionDigits: 2 })}%`;
 }
 
-function receiptHtml(data: DatosRecibo) {
+function isComprobanteCobro(data: DatosEmitibles): data is DatosComprobanteCobro {
+  return "tipo" in data && data.tipo === "cobro_cliente";
+}
+
+function singleReceiptHtml(data: DatosRecibo) {
   const applications = data.aplicaciones
     .map(
       (item) => `<div class="row"><span>Cuota #${escapeHtml(item.numeroCuota)}</span><strong>${escapeHtml(money(item.monto))}</strong></div>`
@@ -102,10 +132,72 @@ function receiptHtml(data: DatosRecibo) {
 </body></html>`;
 }
 
+function collectionReceiptHtml(data: DatosComprobanteCobro) {
+  const receipts = data.recibos.map((item) => {
+    const installments = item.aplicaciones
+      .map((application) => `#${application.numeroCuota || "—"} (${money(application.monto)})`)
+      .join(", ");
+    return `<section class="loan">
+      <div class="row"><span>Recibo oficial</span><strong>${escapeHtml(item.numeroRecibo)}</strong></div>
+      <div class="row"><span>Préstamo</span><strong>${escapeHtml(item.numeroPrestamo)}</strong></div>
+      <div class="row"><span>Aplicado</span><strong>${escapeHtml(money(item.monto))}</strong></div>
+      ${installments ? `<p class="installments">Cuotas ${escapeHtml(installments)}</p>` : ""}
+      <div class="row"><span>Situación</span><strong>${escapeHtml(getCreditStatusLabel(item.estadoCredito))}</strong></div>
+      ${formatReceiptRate(item.tasaMora) ? `<div class="row"><span>Mora pactada</span><strong>${escapeHtml(formatReceiptRate(item.tasaMora))}</strong></div>` : ""}
+      <div class="row"><span>Saldo del préstamo</span><strong>${escapeHtml(money(item.saldoRestante))}</strong></div>
+    </section>`;
+  }).join('<div class="rule"></div>');
+  return `<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>Comprobante de cobro</title>
+<style>
+  @page { size: 80mm auto; margin: 4mm; }
+  * { box-sizing: border-box; }
+  body { width: 72mm; margin: 0 auto; color: #111827; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10.5px; line-height: 1.45; }
+  h1, p { margin: 0; }
+  .center { text-align: center; }
+  .business { font-size: 15px; font-weight: 900; text-transform: uppercase; overflow-wrap: anywhere; }
+  .title { padding: 10px 0; font-size: 14px; font-weight: 900; letter-spacing: .08em; }
+  .rule { border-top: 1px dashed #6b7280; margin: 8px 0; }
+  .row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+  .row strong { text-align: right; overflow-wrap: anywhere; }
+  .amount { padding: 8px 0; font-size: 18px; font-weight: 900; text-align: center; }
+  .loan { padding: 2px 0; }
+  .installments { padding: 3px 0; color: #4b5563; overflow-wrap: anywhere; }
+  .foot { padding-top: 10px; text-align: center; }
+  @media print { body { width: 72mm; } }
+</style></head><body>
+  <header class="center">
+    <h1 class="business">${escapeHtml(data.negocio.nombre)}</h1>
+    ${data.negocio.telefono ? `<p>Tel. ${escapeHtml(data.negocio.telefono)}</p>` : ""}
+    ${data.negocio.direccion ? `<p>${escapeHtml(data.negocio.direccion)}</p>` : ""}
+    ${data.negocio.rtn ? `<p>RTN ${escapeHtml(data.negocio.rtn)}</p>` : ""}
+  </header>
+  <div class="rule"></div><p class="title center">COMPROBANTE DE COBRO</p><div class="rule"></div>
+  <div class="row"><span>Fecha</span><strong>${escapeHtml(receiptDate(data.fecha))}</strong></div>
+  <div class="row"><span>Cliente</span><strong>${escapeHtml(data.clienteNombre)}</strong></div>
+  ${data.clienteIdentidad ? `<div class="row"><span>DNI</span><strong>${escapeHtml(data.clienteIdentidad)}</strong></div>` : ""}
+  <div class="row"><span>Recibos emitidos</span><strong>${data.recibos.length}</strong></div>
+  <div class="rule"></div><p class="center">PAGO TOTAL</p><p class="amount">${escapeHtml(money(data.montoTotal))}</p><div class="rule"></div>
+  ${receipts}
+  <div class="rule"></div>
+  <div class="row"><span>Saldo anterior cliente</span><strong>${escapeHtml(money(data.saldoClienteAnterior))}</strong></div>
+  <div class="row"><span>Saldo a pagar</span><strong>${escapeHtml(money(data.saldoClienteRestante))}</strong></div>
+  <footer class="foot">
+    ${data.negocio.propietario ? `<p>Atendido por</p><p><strong>${escapeHtml(data.negocio.propietario)}</strong></p>` : ""}
+    <p style="margin-top:10px">Gracias por su pago</p>
+  </footer>
+</body></html>`;
+}
+
+function receiptHtml(data: DatosEmitibles) {
+  return isComprobanteCobro(data) ? collectionReceiptHtml(data) : singleReceiptHtml(data);
+}
+
 const RECEIPT_IMAGE_WIDTH = 1080;
 const RECEIPT_IMAGE_MIN_HEIGHT = 1400;
 const RECEIPT_IMAGE_MAX_HEIGHT = 4096;
 const RECEIPT_IMAGE_MAX_APPLICATION_ROWS = 40;
+const RECEIPT_IMAGE_MAX_LOAN_ROWS = 10;
 const RECEIPT_IMAGE_MAX_TEXT_LENGTH = 240;
 const RECEIPT_IMAGE_MAX_TEXT_LINES = 4;
 const RECEIPT_IMAGE_LEFT = 108;
@@ -191,7 +283,12 @@ function wrapCanvasText(context: CanvasRenderingContext2D, value: string, maxWid
   return lines;
 }
 
-function layoutReceiptImage(context: CanvasRenderingContext2D, data: DatosRecibo, paint: boolean) {
+function layoutReceiptImage(
+  context: CanvasRenderingContext2D,
+  data: DatosEmitibles,
+  paint: boolean,
+  maxDetailedLoans = RECEIPT_IMAGE_MAX_LOAN_ROWS,
+) {
   const contentWidth = RECEIPT_IMAGE_RIGHT - RECEIPT_IMAGE_LEFT;
   let y = 92;
   context.textBaseline = "top";
@@ -255,34 +352,73 @@ function layoutReceiptImage(context: CanvasRenderingContext2D, data: DatosRecibo
   if (data.negocio.rtn) centered(`RTN ${data.negocio.rtn}`, 27, 500, 36, "#374151");
   y += 12;
   divider();
-  centered("RECIBO DE PAGO", 38, 900, 50);
-  divider();
-  row("Recibo", data.numeroRecibo, true);
-  row("Fecha", receiptDate(data.fecha));
-  row("Cliente", data.clienteNombre);
-  if (data.clienteIdentidad) row("DNI", data.clienteIdentidad);
-  row("Préstamo", data.numeroPrestamo);
-  row("Situación del crédito", getCreditStatusLabel(data.estadoCredito), true);
-  const lateFeeRate = formatReceiptRate(data.tasaMora);
-  if (lateFeeRate) row("Mora pactada", lateFeeRate);
-  divider();
-  centered("PAGO", 25, 700, 36, "#6b7280");
-  y += 8;
-  centered(money(data.monto), 66, 900, 80, "#0c0a09");
-  y += 10;
-  divider();
-  const visibleApplications = data.aplicaciones.slice(0, RECEIPT_IMAGE_MAX_APPLICATION_ROWS);
-  visibleApplications.forEach((application) => {
-    row(`Cuota #${application.numeroCuota || "—"}`, money(application.monto));
-  });
-  if (data.aplicaciones.length > visibleApplications.length) {
-    const remainingApplications = data.aplicaciones.slice(visibleApplications.length);
-    const remainingAmount = remainingApplications.reduce((total, application) => total + application.monto, 0);
-    row(`${remainingApplications.length} cuotas adicionales`, money(remainingAmount));
+  if (isComprobanteCobro(data)) {
+    centered("COMPROBANTE DE COBRO", 38, 900, 50);
+    divider();
+    row("Fecha", receiptDate(data.fecha));
+    row("Cliente", data.clienteNombre);
+    if (data.clienteIdentidad) row("DNI", data.clienteIdentidad);
+    row("Recibos emitidos", String(data.recibos.length), true);
+    divider();
+    centered("PAGO TOTAL", 25, 700, 36, "#6b7280");
+    y += 8;
+    centered(money(data.montoTotal), 66, 900, 80, "#0c0a09");
+    y += 10;
+    divider();
+    const visibleReceipts = data.recibos.slice(0, maxDetailedLoans);
+    visibleReceipts.forEach((receipt) => {
+      centered(receipt.numeroPrestamo, 30, 900, 40, "#111827");
+      row("Recibo oficial", receipt.numeroRecibo);
+      row("Aplicado", money(receipt.monto), true);
+      const visibleInstallments = receipt.aplicaciones.slice(0, 6);
+      if (visibleInstallments.length) {
+        const installments = visibleInstallments.map((item) => `#${item.numeroCuota || "—"}`).join(", ");
+        row("Cuotas", `${installments}${receipt.aplicaciones.length > visibleInstallments.length ? "…" : ""}`);
+      }
+      row("Situación", getCreditStatusLabel(receipt.estadoCredito));
+      const lateFeeRate = formatReceiptRate(receipt.tasaMora);
+      if (lateFeeRate) row("Mora pactada", lateFeeRate);
+      row("Saldo del préstamo", money(receipt.saldoRestante));
+      divider();
+    });
+    if (data.recibos.length > visibleReceipts.length) {
+      const additional = data.recibos.slice(visibleReceipts.length);
+      row(`${additional.length} recibos adicionales`, money(additional.reduce((total, item) => total + item.monto, 0)));
+      centered("Incluidos en el pago total; consulte el PDF para ver el detalle.", 24, 600, 34, "#6b7280");
+      divider();
+    }
+    row("Saldo anterior cliente", money(data.saldoClienteAnterior));
+    row("Saldo a pagar", money(data.saldoClienteRestante), true);
+  } else {
+    centered("RECIBO DE PAGO", 38, 900, 50);
+    divider();
+    row("Recibo", data.numeroRecibo, true);
+    row("Fecha", receiptDate(data.fecha));
+    row("Cliente", data.clienteNombre);
+    if (data.clienteIdentidad) row("DNI", data.clienteIdentidad);
+    row("Préstamo", data.numeroPrestamo);
+    row("Situación del crédito", getCreditStatusLabel(data.estadoCredito), true);
+    const lateFeeRate = formatReceiptRate(data.tasaMora);
+    if (lateFeeRate) row("Mora pactada", lateFeeRate);
+    divider();
+    centered("PAGO", 25, 700, 36, "#6b7280");
+    y += 8;
+    centered(money(data.monto), 66, 900, 80, "#0c0a09");
+    y += 10;
+    divider();
+    const visibleApplications = data.aplicaciones.slice(0, RECEIPT_IMAGE_MAX_APPLICATION_ROWS);
+    visibleApplications.forEach((application) => {
+      row(`Cuota #${application.numeroCuota || "—"}`, money(application.monto));
+    });
+    if (data.aplicaciones.length > visibleApplications.length) {
+      const remainingApplications = data.aplicaciones.slice(visibleApplications.length);
+      const remainingAmount = remainingApplications.reduce((total, application) => total + application.monto, 0);
+      row(`${remainingApplications.length} cuotas adicionales`, money(remainingAmount));
+    }
+    divider();
+    row("Saldo anterior", money(data.saldoAnterior));
+    row("Saldo a pagar", money(data.saldoRestante), true);
   }
-  divider();
-  row("Saldo anterior", money(data.saldoAnterior));
-  row("Saldo a pagar", money(data.saldoRestante), true);
   y += 34;
   if (data.negocio.propietario) {
     centered("Atendido por", 25, 500, 34, "#6b7280");
@@ -294,23 +430,35 @@ function layoutReceiptImage(context: CanvasRenderingContext2D, data: DatosRecibo
   return y;
 }
 
-function imageFileName(data: DatosRecibo) {
-  const safeNumber = data.numeroRecibo
+function imageFileName(data: DatosEmitibles) {
+  const reference = isComprobanteCobro(data)
+    ? `${data.recibos[0]?.numeroRecibo ?? "cobro"}-${data.recibos.length}-recibos`
+    : data.numeroRecibo;
+  const safeNumber = reference
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-zA-Z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return `recibo-${safeNumber || "pago"}.png`;
+  return `${isComprobanteCobro(data) ? "comprobante-cobro" : "recibo"}-${safeNumber || "pago"}.png`;
 }
 
 /** Genera localmente un PNG térmico; no sube el comprobante ni sus datos. */
-export async function prepararReciboPng(data: DatosRecibo): Promise<File> {
+export async function prepararReciboPng(data: DatosEmitibles): Promise<File> {
   const measuringCanvas = document.createElement("canvas");
   measuringCanvas.width = RECEIPT_IMAGE_WIDTH;
   measuringCanvas.height = 1;
   const measuringContext = measuringCanvas.getContext("2d");
   if (!measuringContext) throw new Error("Este navegador no puede crear la imagen del recibo.");
-  const measuredHeight = layoutReceiptImage(measuringContext, data, false);
+  let detailedLoans = isComprobanteCobro(data)
+    ? Math.min(data.recibos.length, RECEIPT_IMAGE_MAX_LOAN_ROWS)
+    : RECEIPT_IMAGE_MAX_LOAN_ROWS;
+  let measuredHeight = layoutReceiptImage(measuringContext, data, false, detailedLoans);
+  // En teléfonos, un canvas térmico demasiado alto puede fallar. Se conserva
+  // siempre el total y se compacta solo el desglose visible hasta que quepa.
+  while (isComprobanteCobro(data) && measuredHeight > RECEIPT_IMAGE_MAX_HEIGHT && detailedLoans > 0) {
+    detailedLoans -= 1;
+    measuredHeight = layoutReceiptImage(measuringContext, data, false, detailedLoans);
+  }
   if (!Number.isFinite(measuredHeight) || measuredHeight > RECEIPT_IMAGE_MAX_HEIGHT) {
     throw new Error("El recibo es demasiado extenso para convertirlo en imagen.");
   }
@@ -322,7 +470,7 @@ export async function prepararReciboPng(data: DatosRecibo): Promise<File> {
   if (!context) throw new Error("Este navegador no puede crear la imagen del recibo.");
   context.fillStyle = "#ffffff";
   context.fillRect(0, 0, canvas.width, canvas.height);
-  layoutReceiptImage(context, data, true);
+  layoutReceiptImage(context, data, true, detailedLoans);
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (!blob || blob.size === 0) {
@@ -334,7 +482,20 @@ export async function prepararReciboPng(data: DatosRecibo): Promise<File> {
   });
 }
 
-function receiptShareText(data: DatosRecibo) {
+function receiptShareText(data: DatosEmitibles) {
+  if (isComprobanteCobro(data)) {
+    const receipts = data.recibos.map(
+      (item) => `${item.numeroRecibo} · ${item.numeroPrestamo}: ${money(item.monto)} · Saldo ${money(item.saldoRestante)}`
+    );
+    return [
+      `${data.negocio.nombre} — Comprobante de cobro`,
+      `Cliente: ${data.clienteNombre}`,
+      `Pago total: ${money(data.montoTotal)}`,
+      `Saldo a pagar: ${money(data.saldoClienteRestante)}`,
+      ...receipts,
+      `Fecha: ${receiptDate(data.fecha)}`,
+    ].join("\n");
+  }
   const lines = [
     `${data.negocio.nombre} — ${data.numeroRecibo}`,
     `Cliente: ${data.clienteNombre}`,
@@ -349,7 +510,7 @@ function receiptShareText(data: DatosRecibo) {
   return lines.join("\n");
 }
 
-function openWhatsAppText(data: DatosRecibo) {
+function openWhatsAppText(data: DatosEmitibles) {
   const target = window.open("about:blank", "_blank");
   if (!target) return false;
   target.opener = null;
@@ -387,9 +548,9 @@ function isShareCancellation(error: unknown) {
   );
 }
 
-export function emitirRecibo(data: DatosRecibo): void {
+export function emitirRecibo(data: DatosEmitibles): void {
   const iframe = document.createElement("iframe");
-  iframe.setAttribute("title", `Impresión ${data.numeroRecibo}`);
+  iframe.setAttribute("title", isComprobanteCobro(data) ? "Impresión del comprobante de cobro" : `Impresión ${data.numeroRecibo}`);
   iframe.setAttribute("aria-hidden", "true");
   Object.assign(iframe.style, {
     position: "fixed",
@@ -426,7 +587,7 @@ export function emitirRecibo(data: DatosRecibo): void {
 }
 
 export async function compartirReciboWhatsApp(
-  data: DatosRecibo,
+  data: DatosEmitibles,
   preparedImage?: File | null
 ): Promise<ResultadoCompartirRecibo> {
   if (!preparedImage || preparedImage.size === 0) {
@@ -437,7 +598,7 @@ export async function compartirReciboWhatsApp(
   if (canShareImage(image)) {
     try {
       await navigator.share({
-        title: `Recibo ${data.numeroRecibo}`,
+        title: isComprobanteCobro(data) ? "Comprobante de cobro" : `Recibo ${data.numeroRecibo}`,
         text: receiptShareText(data),
         files: [image],
       });
@@ -455,7 +616,7 @@ export async function compartirReciboWhatsApp(
 }
 
 /** v2: impresión ESC/POS en térmicas Bluetooth. */
-export function imprimirEscPosBluetooth(_data: DatosRecibo): void {
+export function imprimirEscPosBluetooth(_data: DatosEmitibles): void {
   // TODO v2: Capacitor
   throw new Error("Impresión Bluetooth nativa llega en la v2.");
 }
