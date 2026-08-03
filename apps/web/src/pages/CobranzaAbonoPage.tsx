@@ -106,7 +106,15 @@ export function CobranzaAbonoPage() {
       await registrarGestion({ clienteId, resultado: "pago", pagoId: pagoIds[0] }).catch(() => {});
       navigate(`/pagos/${pagoIds[0]}/recibo`, {
         replace: true,
-        state: { created: true, origen: "cobranza", pagoIds, totalCobrado: monto },
+        state: {
+          created: true,
+          origen: "cobranza",
+          pagoIds,
+          totalCobrado: monto,
+          clienteId,
+          saldoClienteAnterior: data.saldoTotal,
+          saldoClienteRestante: nuevoSaldo,
+        },
       });
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "";
@@ -224,7 +232,7 @@ export function CobranzaAbonoPage() {
                     <strong className="tabular-nums">{formatMoney("L", parte.monto)}</strong>
                   </p>
                 ))}
-                <p className="pt-1">Cada préstamo genera su propio recibo.</p>
+                <p className="pt-1">Recibirá un solo comprobante con el detalle de cada recibo oficial.</p>
               </div>
             ) : null}
           </Card>
@@ -263,7 +271,7 @@ export function CobranzaAbonoPage() {
             <p className="mt-2 flex justify-between gap-3"><span className="text-pf-muted">Saldo actual</span><strong className="tabular-nums">{formatMoney("L", data?.saldoTotal ?? 0)}</strong></p>
             <p className="mt-2 flex justify-between gap-3 border-t border-pf-border-soft pt-2"><span className="font-bold text-pf-text">Nuevo saldo</span><strong className="text-lg tabular-nums text-pf-text">{formatMoney("L", nuevoSaldo)}</strong></p>
           </div>
-          <p className="text-xs leading-relaxed text-pf-muted">El monto se aplicará a las cuotas más antiguas{reparto.length > 1 ? " de cada préstamo" : ""} y se generará el recibo.</p>
+          <p className="text-xs leading-relaxed text-pf-muted">El monto se aplicará a las cuotas más antiguas{reparto.length > 1 ? " de cada préstamo y se generará un comprobante consolidado" : " y se generará el recibo"}.</p>
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Button type="button" variant="secondary" disabled={saving} onClick={() => setConfirmOpen(false)}>Volver y corregir</Button>
             <Button type="button" className="min-h-[48px]" disabled={saving} onClick={() => void confirmar()}>

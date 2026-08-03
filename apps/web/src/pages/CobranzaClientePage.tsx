@@ -294,10 +294,19 @@ export function CobranzaClientePage() {
             </div>
 
             {data.promesa ? (
-              <p className="flex items-center gap-2 rounded-xl border border-pf-warning-soft bg-pf-warning-soft/45 px-3 py-2 text-sm text-pf-text-secondary">
-                <CalendarClock className="h-4 w-4 shrink-0 text-pf-warning" strokeWidth={2} aria-hidden />
-                Prometió <strong className="tabular-nums text-pf-text">{formatMoney("L", data.promesa.monto)}</strong> para el {formatDateOnly(data.promesa.fecha)}.
-              </p>
+              <div className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-sm ${data.promesa.vencida ? "border-pf-danger-soft bg-pf-danger-soft/40 text-pf-danger" : "border-pf-warning-soft bg-pf-warning-soft/45 text-pf-text-secondary"}`} role={data.promesa.vencida ? "alert" : "status"}>
+                <CalendarClock className={`mt-0.5 h-4 w-4 shrink-0 ${data.promesa.vencida ? "text-pf-danger" : "text-pf-warning"}`} strokeWidth={2} aria-hidden />
+                <p>
+                  {data.promesa.vencida ? "Promesa vencida: debía pagar" : "Prometió"}{" "}
+                  <strong className="tabular-nums text-pf-text">{formatMoney("L", data.promesa.monto)}</strong>{" "}
+                  {data.promesa.vencida ? "el" : "para el"} {formatDateOnly(data.promesa.fecha)}.
+                  {data.promesa.montoPagado > 0 ? (
+                    <span className="mt-0.5 block text-xs font-medium">
+                      Ya abonó {formatMoney("L", data.promesa.montoPagado)} de {formatMoney("L", data.promesa.montoOriginal)}.
+                    </span>
+                  ) : null}
+                </p>
+              </div>
             ) : null}
 
             <SituacionCredito data={data} />

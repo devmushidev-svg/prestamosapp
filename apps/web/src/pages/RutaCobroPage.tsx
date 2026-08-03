@@ -9,6 +9,7 @@ import { formatDateOnly, formatMoney } from "../lib/format";
 type Orden = "pago_sugerido" | "pago_requerido" | "dias_atraso" | "colonia" | "manual";
 type TabRuta = "pendientes" | "visitados";
 type ModoRuta = "sugerida" | "personalizada";
+type AlcanceRuta = "hoy" | "todos";
 
 const ORDEN_KEY = "multiprestamos.ruta-orden";
 const MODO_KEY = "multiprestamos.ruta-modo";
@@ -57,6 +58,7 @@ export function RutaCobroPage() {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TabRuta>("pendientes");
+  const [alcance, setAlcance] = useState<AlcanceRuta>("hoy");
   const [search, setSearch] = useState("");
   const [modo, setModo] = useState<ModoRuta>(() => localStorage.getItem(MODO_KEY) === "personalizada" ? "personalizada" : "sugerida");
   const [colonia, setColonia] = useState("");
@@ -85,7 +87,10 @@ export function RutaCobroPage() {
     void load();
   }, [load]);
 
-  const clientes = useMemo(() => data?.clientes ?? [], [data]);
+  const clientes = useMemo(
+    () => alcance === "hoy" ? data?.clientes ?? [] : data?.cartera ?? [],
+    [alcance, data],
+  );
 
   const colonias = useMemo(() => {
     const counts = new Map<string, { label: string; total: number }>();
@@ -123,8 +128,8 @@ export function RutaCobroPage() {
   const visitados = useMemo(() => sortClientes(filtrados.filter((item) => item.visitadoHoy), ordenEfectivo), [filtrados, ordenEfectivo]);
   const visible = tab === "pendientes" ? pendientes : visitados;
   const porCobrarHoy = useMemo(
-    () => clientes.filter((item) => !item.visitadoHoy).reduce((s, item) => s + item.pagoSugerido, 0),
-    [clientes]
+    () => (data?.clientes ?? []).filter((item) => !item.visitadoHoy).reduce((s, item) => s + item.pagoSugerido, 0),
+    [data]
   );
   const rutaMaps = useMemo(() => {
     const clientesConDireccion = pendientes.filter((item) => item.cliente.direccion?.trim());
@@ -148,16 +153,16 @@ export function RutaCobroPage() {
     if (next === "personalizada" && orden === "manual") await setOrden("manual");
   }
 
-  async function setOrden(next: Orden) {
+  async function setOrden(next: Orden, fuente: ClienteRuta[] = clientes) {
     const previo = orden;
     setOrdenState(next);
     localStorage.setItem(ORDEN_KEY, next);
     if (next !== "manual" || !data) return;
     // Conserva las posiciones personalizadas existentes. Los clientes nuevos
     // se agregan al final para que nunca borren el recorrido que ya se ordenó.
-    const sinOrden = clientes.filter((item) => item.cliente.orden_ruta == null);
+    const sinOrden = fuente.filter((item) => item.cliente.orden_ruta == null);
     if (!sinOrden.length) return;
-    const ultimoOrden = clientes.reduce(
+    const ultimoOrden = data.cartera.reduce(
       (maximo, item) => Math.max(maximo, item.cliente.orden_ruta ?? -1),
       -1,
     );
@@ -169,7 +174,11 @@ export function RutaCobroPage() {
       const posiciones = new Map(items.map((item) => [item.id, item.orden_ruta]));
       setData({
         ...data,
-        clientes: clientes.map((item) => ({
+        clientes: data.clientes.map((item) => ({
+          ...item,
+          cliente: { ...item.cliente, orden_ruta: posiciones.get(item.cliente.id) ?? item.cliente.orden_ruta },
+        })),
+        cartera: data.cartera.map((item) => ({
           ...item,
           cliente: { ...item.cliente, orden_ruta: posiciones.get(item.cliente.id) ?? item.cliente.orden_ruta },
         })),
@@ -183,13 +192,25 @@ export function RutaCobroPage() {
     }
   }
 
+  async function cambiarAlcance(next: AlcanceRuta) {
+    setAlcance(next);
+    setTab("pendientes");
+    if (next === "todos" && orden === "manual" && data) {
+      await setOrden("manual", data.cartera);
+    }
+  }
+
   async function mover(index: number, delta: -1 | 1) {
     if (!data) return;
     const actual = visible[index];
     const vecino = visible[index + delta];
     if (!actual || !vecino) return;
-    const ordenActual = actual.cliente.orden_ruta ?? 0;
-    const ordenVecino = vecino.cliente.orden_ruta ?? 0;
+    if (actual.cliente.orden_ruta == null || vecino.cliente.orden_ruta == null) {
+      await setOrden("manual", clientes);
+      return;
+    }
+    const ordenActual = actual.cliente.orden_ruta;
+    const ordenVecino = vecino.cliente.orden_ruta;
     try {
       setMovingId(actual.cliente.id);
       await guardarOrdenRuta([
@@ -198,7 +219,12 @@ export function RutaCobroPage() {
       ]);
       setData({
         ...data,
-        clientes: clientes.map((item) => {
+        clientes: data.clientes.map((item) => {
+          if (item.cliente.id === actual.cliente.id) return { ...item, cliente: { ...item.cliente, orden_ruta: ordenVecino } };
+          if (item.cliente.id === vecino.cliente.id) return { ...item, cliente: { ...item.cliente, orden_ruta: ordenActual } };
+          return item;
+        }),
+        cartera: data.cartera.map((item) => {
           if (item.cliente.id === actual.cliente.id) return { ...item, cliente: { ...item.cliente, orden_ruta: ordenVecino } };
           if (item.cliente.id === vecino.cliente.id) return { ...item, cliente: { ...item.cliente, orden_ruta: ordenActual } };
           return item;
@@ -214,8 +240,8 @@ export function RutaCobroPage() {
   return (
     <div className="space-y-4 pf-safe-page">
       <PageHero title="Ruta de cobro" constrained>
-        <p className="pf-page-lead max-w-2xl">Clientes con cobro pendiente, listos para la visita del día.</p>
-        <p className="pf-page-lead-muted">El pago sugerido suma lo atrasado y la cuota que vence hoy.</p>
+        <p className="pf-page-lead max-w-2xl">Organice las visitas del día o busque cualquier cliente de la cartera activa.</p>
+        <p className="pf-page-lead-muted">El pago sugerido suma lo atrasado, la cuota que vence hoy y las promesas exigibles.</p>
       </PageHero>
 
       {data?.migracionPendiente ? (
@@ -233,11 +259,49 @@ export function RutaCobroPage() {
       ) : err && !data ? (
         <Card><EmptyState title="No se pudo cargar la ruta" description={err} icon={<Route className="h-5 w-5" strokeWidth={2} aria-hidden />} action={<Button type="button" variant="secondary" onClick={() => void load()}>Reintentar</Button>} /></Card>
       ) : clientes.length === 0 ? (
-        <Card><EmptyState title="No hay cobros pendientes" description="Cuando existan préstamos con saldo, los clientes aparecerán aquí ordenados para la visita." icon={<Route className="h-5 w-5" strokeWidth={2} aria-hidden />} /></Card>
+        <Card>
+          <EmptyState
+            title={alcance === "hoy" ? "La ruta de hoy está al día" : "No hay préstamos activos"}
+            description={alcance === "hoy"
+              ? "No hay cuotas ni promesas exigibles hoy. Puede abrir toda la cartera para buscar y recibir un abono anticipado."
+              : "Cuando existan préstamos con saldo, los clientes aparecerán aquí."}
+            icon={<Route className="h-5 w-5" strokeWidth={2} aria-hidden />}
+            action={alcance === "hoy" && (data?.cartera.length ?? 0) > 0
+              ? <Button type="button" variant="secondary" onClick={() => void cambiarAlcance("todos")}>Ver toda la cartera</Button>
+              : undefined}
+          />
+        </Card>
       ) : (
         <div className="mx-auto w-full max-w-3xl space-y-3">
+          <Card className="p-2">
+            <div className="pf-settings-tabs-nav" role="tablist" aria-label="Clientes para cobrar">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={alcance === "hoy"}
+                className={`min-h-[48px] flex-1 rounded-xl px-3 py-2 text-sm font-bold transition-colors ${alcance === "hoy" ? "pf-settings-tab-active" : "pf-settings-tab-idle"}`}
+                onClick={() => void cambiarAlcance("hoy")}
+              >
+                Cobros de hoy ({data?.clientes.length ?? 0})
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={alcance === "todos"}
+                className={`min-h-[48px] flex-1 rounded-xl px-3 py-2 text-sm font-bold transition-colors ${alcance === "todos" ? "pf-settings-tab-active" : "pf-settings-tab-idle"}`}
+                onClick={() => void cambiarAlcance("todos")}
+              >
+                Toda la cartera ({data?.cartera.length ?? 0})
+              </button>
+            </div>
+            <p className="px-2 pb-1 pt-2 text-center text-xs font-medium text-pf-muted">
+              {alcance === "hoy"
+                ? "Solo clientes que requieren atención hoy."
+                : "Incluye clientes al día para consultas o abonos anticipados."}
+            </p>
+          </Card>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="pf-filter-chip">Clientes ({clientes.length})</span>
+            <span className="pf-filter-chip">{alcance === "hoy" ? "Ruta" : "Cartera"} ({clientes.length})</span>
             {(search.trim() || (modo === "personalizada" && colonia)) ? (
               <span className="pf-filter-chip">Mostrando: <strong className="ml-1 tabular-nums">{filtrados.length}</strong></span>
             ) : null}
@@ -379,6 +443,9 @@ export function RutaCobroPage() {
             <div className="space-y-2 pf-stagger">
               {visible.map((item, index) => {
                 const moroso = item.diasAtraso > 0;
+                const promesaVencida = Boolean(item.promesa?.vencida);
+                const requiereAtencion = moroso || promesaVencida;
+                const fueraDeRuta = alcance === "todos" && item.pagoSugerido <= 0 && !item.promesa;
                 return (
                   <Card key={item.cliente.id} className="overflow-hidden p-0">
                     <div className="flex items-stretch">
@@ -388,11 +455,11 @@ export function RutaCobroPage() {
                         onClick={() => navigate(`/cobranza/${item.cliente.id}`)}
                         aria-label={`Gestionar a ${item.cliente.nombre}`}
                       >
-                        <span className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${moroso ? "bg-pf-danger-soft text-pf-danger" : "bg-pf-primary-soft text-pf-primary-hover"}`}>
+                        <span className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${requiereAtencion ? "bg-pf-danger-soft text-pf-danger" : "bg-pf-primary-soft text-pf-primary-hover"}`}>
                           <UserRound className="h-5 w-5" strokeWidth={2} aria-hidden />
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className={`block truncate font-extrabold ${moroso ? "text-pf-danger" : "text-pf-text"}`}>{item.cliente.nombre}</span>
+                          <span className={`block truncate font-extrabold ${requiereAtencion ? "text-pf-danger" : "text-pf-text"}`}>{item.cliente.nombre}</span>
                           <span className="mt-0.5 flex min-w-0 items-start gap-1.5 text-xs text-pf-muted">
                             <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={2} aria-hidden />
                             <span className="min-w-0 break-words">{[item.cliente.direccion, item.cliente.colonia && `Col. ${item.cliente.colonia}`].filter(Boolean).join(" · ") || "Sin dirección"}</span>
@@ -401,21 +468,32 @@ export function RutaCobroPage() {
                             <span>
                               {item.promesa ? (
                                 <>
-                                  <span className="block text-xs font-semibold text-pf-muted">Monto prometido:</span>
-                                  <span className="block text-lg font-black tabular-nums text-pf-warning">{formatMoney("L", item.promesa.monto)}</span>
-                                  <span className="flex items-center gap-1 text-[11px] font-semibold text-pf-warning">
-                                    <CalendarClock className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
-                                    Para el {formatDateOnly(item.promesa.fecha)}
+                                  <span className={`block text-xs font-semibold ${promesaVencida ? "text-pf-danger" : "text-pf-muted"}`}>
+                                    {promesaVencida ? "Promesa vencida:" : item.promesa.montoPagado > 0 ? "Pendiente de promesa:" : "Monto prometido:"}
                                   </span>
+                                  <span className={`block text-lg font-black tabular-nums ${promesaVencida ? "text-pf-danger" : "text-pf-warning"}`}>{formatMoney("L", item.promesa.monto)}</span>
+                                  <span className={`flex items-center gap-1 text-[11px] font-semibold ${promesaVencida ? "text-pf-danger" : "text-pf-warning"}`}>
+                                    <CalendarClock className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+                                    {promesaVencida ? "Debía pagar el" : "Para el"} {formatDateOnly(item.promesa.fecha)}
+                                  </span>
+                                  {item.promesa.montoPagado > 0 ? (
+                                    <span className="mt-0.5 block text-[11px] font-medium text-pf-muted">
+                                      Abonó {formatMoney("L", item.promesa.montoPagado)} de {formatMoney("L", item.promesa.montoOriginal)}
+                                    </span>
+                                  ) : null}
                                 </>
                               ) : (
                                 <>
-                                  <span className="block text-xs font-semibold text-pf-muted">Pago sugerido:</span>
-                                  <span className="block text-lg font-black tabular-nums text-pf-danger">{formatMoney("L", item.pagoSugerido)}</span>
+                                  <span className="block text-xs font-semibold text-pf-muted">{fueraDeRuta ? "Saldo total:" : "Pago sugerido:"}</span>
+                                  <span className={`block text-lg font-black tabular-nums ${fueraDeRuta ? "text-pf-text" : "text-pf-danger"}`}>
+                                    {formatMoney("L", fueraDeRuta ? item.saldoTotal : item.pagoSugerido)}
+                                  </span>
                                 </>
                               )}
                             </span>
-                            {moroso ? (
+                            {promesaVencida ? (
+                              <span className="rounded-full bg-pf-danger-soft px-2.5 py-1 text-xs font-bold text-pf-danger">Promesa vencida</span>
+                            ) : moroso ? (
                               <span className="rounded-full bg-pf-danger-soft px-2.5 py-1 text-xs font-bold text-pf-danger">
                                 {item.diasAtraso} {item.diasAtraso === 1 ? "día" : "días"} de atraso
                               </span>

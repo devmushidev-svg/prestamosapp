@@ -30,11 +30,20 @@ export type ClienteRuta = {
   cuotasVencidas: number;
   diasAtraso: number;
   visitadoHoy: boolean;
-  promesa: { monto: number; fecha: string } | null;
+  promesa: {
+    monto: number;
+    montoOriginal: number;
+    montoPagado: number;
+    fecha: string;
+    vencida: boolean;
+  } | null;
 };
 
 export type RutaCobro = {
+  /** Clientes exigibles hoy: vencidos, cuota de hoy, promesa o visita del día. */
   clientes: ClienteRuta[];
+  /** Todos los clientes con al menos un préstamo activo y saldo pendiente. */
+  cartera: ClienteRuta[];
   /** true cuando la tabla `gestiones` aún no existe en Supabase. */
   migracionPendiente: boolean;
 };
@@ -58,6 +67,53 @@ function normalizeGestion(row: Gestion): Gestion {
     ...row,
     monto_prometido: row.monto_prometido == null ? null : Number(row.monto_prometido),
   };
+}
+
+type CobranzaQueryError = { code?: string; message: string };
+type PagoRutaRow = { id: string; prestamo_id: string; fecha: string; monto: number };
+type PromesaGestionRow = Pick<
+  Gestion,
+  "id" | "cliente_id" | "fecha" | "monto_prometido" | "fecha_promesa" | "creado_en"
+>;
+
+async function listPromesasCobranza(): Promise<{ data: PromesaGestionRow[]; error: CobranzaQueryError | null }> {
+  const pageSize = 500;
+  const rows: PromesaGestionRow[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const result = await supabase
+      .from("gestiones")
+      .select("id,cliente_id,fecha,monto_prometido,fecha_promesa,creado_en")
+      .eq("resultado", "promesa_pago")
+      .order("fecha", { ascending: false })
+      .order("creado_en", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (result.error) return { data: [], error: result.error };
+    const batch = ((result.data ?? []) as PromesaGestionRow[]).map((row) => ({
+      ...row,
+      monto_prometido: row.monto_prometido == null ? null : Number(row.monto_prometido),
+    }));
+    rows.push(...batch);
+    if (batch.length < pageSize) return { data: rows, error: null };
+  }
+}
+
+async function listPagosCobranzaDesde(fechaIso: string): Promise<PagoRutaRow[]> {
+  const pageSize = 500;
+  const rows: PagoRutaRow[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from("pagos")
+      .select("id,prestamo_id,fecha,monto")
+      .gte("fecha", fechaIso)
+      .order("fecha", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    const batch = ((data ?? []) as PagoRutaRow[]).map((row) => ({ ...row, monto: Number(row.monto) }));
+    rows.push(...batch);
+    if (batch.length < pageSize) return rows;
+  }
 }
 
 /** Días entre una fecha civil YYYY-MM-DD y hoy (Honduras); ambas se parsean como UTC puro. */
@@ -107,7 +163,7 @@ function buildClienteRuta(
   prestamos: PrestamoRuta[],
   hoy: string,
   visitadoHoy: boolean,
-  promesa: { monto: number; fecha: string } | null
+  promesa: ClienteRuta["promesa"]
 ): ClienteRuta {
   const saldoTotalCents = prestamos.reduce((s, p) => s + moneyToCents(p.prestamo.saldo), 0);
   const atrasadoCents = prestamos.reduce((s, p) => s + moneyToCents(p.atrasado), 0);
@@ -116,7 +172,9 @@ function buildClienteRuta(
   const cuotasVencidas = prestamos.reduce((s, p) => s + p.cuotasVencidas, 0);
   const diasAtraso = prestamos.reduce((maximo, item) => Math.max(maximo, item.diasAtraso), 0);
   const sugeridoCalendarioCents = atrasadoCents + moratoriosCents + cuotaCorrienteCents;
-  const promesaHoyCents = promesa?.fecha === hoy ? Math.max(0, moneyToCents(promesa.monto)) : 0;
+  const promesaExigibleCents = promesa?.fecha && promesa.fecha <= hoy
+    ? Math.max(0, moneyToCents(promesa.monto))
+    : 0;
   return {
     cliente,
     prestamos,
@@ -126,9 +184,9 @@ function buildClienteRuta(
     cuotaCorriente: cuotaCorrienteCents / 100,
     // min(): tope de seguridad para cuando existan moratorios; hoy nunca recorta.
     pagoRequerido: Math.min(atrasadoCents + moratoriosCents, saldoTotalCents) / 100,
-    // Una promesa que vence hoy funciona como sugerencia operativa, pero nunca
-    // reduce lo vencido ni permite cobrar más que el saldo real.
-    pagoSugerido: Math.min(Math.max(sugeridoCalendarioCents, promesaHoyCents), saldoTotalCents) / 100,
+    // Una promesa de hoy o vencida funciona como sugerencia operativa, pero
+    // nunca reduce lo vencido ni permite cobrar más que el saldo real.
+    pagoSugerido: Math.min(Math.max(sugeridoCalendarioCents, promesaExigibleCents), saldoTotalCents) / 100,
     cuotasVencidas,
     diasAtraso,
     visitadoHoy,
@@ -140,23 +198,16 @@ export async function getRutaCobro(): Promise<RutaCobro> {
   await refreshPortfolioStatuses();
   const { fecha: hoy, inicioIso } = hondurasTodayRange();
 
-  const [clientes, prestamos, cuotasResult, gestionesHoyResult, promesasResult, pagosHoyResult] =
+  const [clientes, prestamos, cuotasResult, gestionesHoyResult, promesasResult] =
     await Promise.all([
       listCustomers(),
       listLoans(),
       supabase.from("cuotas").select("*").neq("estado", "pagada"),
       supabase.from("gestiones").select("*").gte("fecha", inicioIso),
-      supabase
-        .from("gestiones")
-        .select("*")
-        .eq("resultado", "promesa_pago")
-        .gte("fecha_promesa", hoy)
-        .order("fecha", { ascending: false }),
-      supabase.from("pagos").select("id,prestamo_id,fecha").gte("fecha", inicioIso),
+      listPromesasCobranza(),
     ]);
 
   if (cuotasResult.error) throw cuotasResult.error;
-  if (pagosHoyResult.error) throw pagosHoyResult.error;
   let migracionPendiente = false;
   for (const result of [gestionesHoyResult, promesasResult]) {
     if (result.error && !isMissingCobranzaMigration(result.error)) throw result.error;
@@ -167,7 +218,21 @@ export async function getRutaCobro(): Promise<RutaCobro> {
     : ((gestionesHoyResult.data ?? []) as Gestion[]).map(normalizeGestion);
   const promesas = migracionPendiente
     ? []
-    : ((promesasResult.data ?? []) as Gestion[]).map(normalizeGestion);
+    : promesasResult.data;
+
+  // Primero se conserva solo la promesa más reciente por cliente; una promesa
+  // antigua no debe reaparecer si la nueva ya fue cumplida.
+  const ultimaPromesaPorCliente = new Map<string, PromesaGestionRow>();
+  for (const gestion of promesas) {
+    if (!ultimaPromesaPorCliente.has(gestion.cliente_id)) {
+      ultimaPromesaPorCliente.set(gestion.cliente_id, gestion);
+    }
+  }
+  const pagosDesde = Array.from(ultimaPromesaPorCliente.values()).reduce(
+    (masAntigua, gestion) => gestion.fecha < masAntigua ? gestion.fecha : masAntigua,
+    inicioIso,
+  );
+  const pagosCobranza = await listPagosCobranzaDesde(pagosDesde);
 
   const cuotasPorPrestamo = new Map<string, Cuota[]>();
   for (const row of (cuotasResult.data ?? []) as Cuota[]) {
@@ -195,20 +260,37 @@ export async function getRutaCobro(): Promise<RutaCobro> {
 
   const clientesVisitados = new Set<string>(gestionesHoy.map((gestion) => gestion.cliente_id));
   const prestamoACliente = new Map(prestamos.map((loan) => [loan.id, loan.cliente_id]));
-  for (const pago of (pagosHoyResult.data ?? []) as Array<{ id: string; prestamo_id: string }>) {
+  const pagosPorCliente = new Map<string, PagoRutaRow[]>();
+  for (const pago of pagosCobranza) {
     const clienteId = prestamoACliente.get(pago.prestamo_id);
-    if (clienteId) clientesVisitados.add(clienteId);
+    if (!clienteId) continue;
+    if (pago.fecha >= inicioIso) clientesVisitados.add(clienteId);
+    const grupo = pagosPorCliente.get(clienteId);
+    if (grupo) grupo.push(pago);
+    else pagosPorCliente.set(clienteId, [pago]);
   }
 
-  // La más reciente por cliente gana (vienen ordenadas por fecha desc).
-  const promesaPorCliente = new Map<string, { monto: number; fecha: string }>();
-  for (const gestion of promesas) {
-    if (promesaPorCliente.has(gestion.cliente_id)) continue;
+  const promesaPorCliente = new Map<string, NonNullable<ClienteRuta["promesa"]>>();
+  for (const gestion of ultimaPromesaPorCliente.values()) {
     if (gestion.monto_prometido == null || !gestion.fecha_promesa) continue;
-    promesaPorCliente.set(gestion.cliente_id, { monto: gestion.monto_prometido, fecha: gestion.fecha_promesa });
+    const montoOriginalCents = moneyToCents(gestion.monto_prometido);
+    const montoPagadoCents = (pagosPorCliente.get(gestion.cliente_id) ?? []).reduce(
+      (total, pago) => pago.fecha > gestion.fecha ? total + moneyToCents(pago.monto) : total,
+      0,
+    );
+    const montoPendienteCents = Math.max(0, montoOriginalCents - montoPagadoCents);
+    if (montoPendienteCents === 0) continue;
+    promesaPorCliente.set(gestion.cliente_id, {
+      monto: montoPendienteCents / 100,
+      montoOriginal: montoOriginalCents / 100,
+      montoPagado: Math.min(montoPagadoCents, montoOriginalCents) / 100,
+      fecha: gestion.fecha_promesa,
+      vencida: gestion.fecha_promesa < hoy,
+    });
   }
 
   const ruta: ClienteRuta[] = [];
+  const cartera: ClienteRuta[] = [];
   for (const cliente of clientes) {
     const prestamosCliente = prestamosPorCliente.get(cliente.id);
     if (!prestamosCliente?.length) continue;
@@ -219,19 +301,20 @@ export async function getRutaCobro(): Promise<RutaCobro> {
       clientesVisitados.has(cliente.id),
       promesaPorCliente.get(cliente.id) ?? null
     );
+    cartera.push(item);
     // La ruta del día contiene cobros vencidos o que vencen hoy. Quienes ya
     // fueron visitados permanecen visibles hasta que termine la jornada.
-    if (item.pagoSugerido > 0 || item.visitadoHoy || item.promesa?.fecha === hoy) {
+    if (item.pagoSugerido > 0 || item.visitadoHoy || Boolean(item.promesa && item.promesa.fecha <= hoy)) {
       ruta.push(item);
     }
   }
-  return { clientes: ruta, migracionPendiente };
+  return { clientes: ruta, cartera, migracionPendiente };
 }
 
 export async function getClienteRuta(clienteId: string): Promise<ClienteRuta | null> {
   // ponytail: reusa getRutaCobro; con <500 clientes no amerita una query dedicada.
-  const { clientes } = await getRutaCobro();
-  return clientes.find((item) => item.cliente.id === clienteId) ?? null;
+  const { cartera } = await getRutaCobro();
+  return cartera.find((item) => item.cliente.id === clienteId) ?? null;
 }
 
 const RESULTADO_GESTION_LABELS: Record<Exclude<ResultadoGestion, "pago">, string> = {
@@ -388,10 +471,22 @@ export async function cobrarCliente(input: {
 }
 
 export async function guardarOrdenRuta(items: Array<{ id: string; orden_ruta: number }>): Promise<void> {
-  // ponytail: un update por fila; se usa al activar el orden manual (una vez) y al mover (2 filas).
-  const results = await Promise.all(
-    items.map((item) => supabase.from("clientes").update({ orden_ruta: item.orden_ruta }).eq("id", item.id))
-  );
-  const failed = results.find((result) => result.error);
-  if (failed?.error) throw failed.error;
+  if (!items.length) return;
+  const ids = items.map((item) => item.id);
+  const previousResult = await supabase.from("clientes").select("id,orden_ruta").in("id", ids);
+  if (previousResult.error) throw previousResult.error;
+  const previous = new Map((previousResult.data ?? []).map((item) => [item.id, item.orden_ruta]));
+  const updated: string[] = [];
+  for (const item of items) {
+    const result = await supabase.from("clientes").update({ orden_ruta: item.orden_ruta }).eq("id", item.id);
+    if (result.error) {
+      // Supabase REST no agrupa varios UPDATE en una transacción. Si uno falla,
+      // se restauran los ya aplicados para no dejar posiciones duplicadas.
+      await Promise.allSettled(updated.map((id) =>
+        supabase.from("clientes").update({ orden_ruta: previous.get(id) ?? null }).eq("id", id)
+      ));
+      throw result.error;
+    }
+    updated.push(item.id);
+  }
 }

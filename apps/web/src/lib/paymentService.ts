@@ -154,3 +154,8 @@ export async function getPaymentDetail(id: string): Promise<PaymentDetail> {
   });
   return { pago, prestamo, aplicaciones };
 }
+
+export async function getPaymentDetails(ids: string[]): Promise<PaymentDetail[]> {
+  const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+  return Promise.all(uniqueIds.map((id) => getPaymentDetail(id)));
+}
