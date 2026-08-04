@@ -7,17 +7,24 @@ import App from "./App";
 import "./index.css";
 import { applyStoredTheme } from "./theme/pfTheme";
 import { ThemeProvider } from "./theme/ThemeProvider";
+import { OfflineProvider } from "./offline/OfflineContext";
+import { initializePwaInstallCapture } from "./hooks/usePwaInstall";
+import { enableLocalOfflineTestMode } from "./lib/localOfflineTestMode";
 
+enableLocalOfflineTestMode();
 applyStoredTheme();
+initializePwaInstallCapture();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter>
       <ThemeProvider>
         <AuthProvider>
-          <BusinessConfigProvider>
-            <App />
-          </BusinessConfigProvider>
+          <OfflineProvider>
+            <BusinessConfigProvider>
+              <App />
+            </BusinessConfigProvider>
+          </OfflineProvider>
         </AuthProvider>
       </ThemeProvider>
     </BrowserRouter>

@@ -1,10 +1,16 @@
 import { formatLoanNumber, formatMoney, hondurasTodayRange } from "./format";
-import { listCustomers } from "./customerService";
-import { listLoans, type PrestamoConCliente } from "./loanService";
+import { CUSTOMERS_CACHE_KEY, listCustomers } from "./customerService";
+import { listAllInstallments, listLoans, type PrestamoConCliente } from "./loanService";
 import { moneyToCents, withInstallmentBalances, type CuotaConSaldo } from "./paymentAllocator";
-import { refreshPortfolioStatuses, registerPayment } from "./paymentService";
+import { listPayments, refreshPortfolioStatuses, registerPayment } from "./paymentService";
 import { supabase } from "./supabase";
 import type { Cliente, Cuota, Gestion, ResultadoGestion } from "../types";
+import {
+  isNetworkFailure,
+  queueOfflineOperation,
+  readThroughCache,
+  updateCache,
+} from "./offlineDb";
 
 export type PrestamoRuta = {
   prestamo: PrestamoConCliente;
@@ -69,51 +75,35 @@ function normalizeGestion(row: Gestion): Gestion {
   };
 }
 
-type CobranzaQueryError = { code?: string; message: string };
 type PagoRutaRow = { id: string; prestamo_id: string; fecha: string; monto: number };
 type PromesaGestionRow = Pick<
   Gestion,
   "id" | "cliente_id" | "fecha" | "monto_prometido" | "fecha_promesa" | "creado_en"
 >;
 
-async function listPromesasCobranza(): Promise<{ data: PromesaGestionRow[]; error: CobranzaQueryError | null }> {
-  const pageSize = 500;
-  const rows: PromesaGestionRow[] = [];
-  for (let from = 0; ; from += pageSize) {
-    const result = await supabase
-      .from("gestiones")
-      .select("id,cliente_id,fecha,monto_prometido,fecha_promesa,creado_en")
-      .eq("resultado", "promesa_pago")
-      .order("fecha", { ascending: false })
-      .order("creado_en", { ascending: false })
-      .order("id", { ascending: false })
-      .range(from, from + pageSize - 1);
-    if (result.error) return { data: [], error: result.error };
-    const batch = ((result.data ?? []) as PromesaGestionRow[]).map((row) => ({
-      ...row,
-      monto_prometido: row.monto_prometido == null ? null : Number(row.monto_prometido),
-    }));
-    rows.push(...batch);
-    if (batch.length < pageSize) return { data: rows, error: null };
-  }
-}
+export const GESTIONES_CACHE_KEY = "gestiones";
+type GestionesSnapshot = { rows: Gestion[]; migracionPendiente: boolean };
 
-async function listPagosCobranzaDesde(fechaIso: string): Promise<PagoRutaRow[]> {
-  const pageSize = 500;
-  const rows: PagoRutaRow[] = [];
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
-      .from("pagos")
-      .select("id,prestamo_id,fecha,monto")
-      .gte("fecha", fechaIso)
-      .order("fecha", { ascending: true })
-      .order("id", { ascending: true })
-      .range(from, from + pageSize - 1);
-    if (error) throw error;
-    const batch = ((data ?? []) as PagoRutaRow[]).map((row) => ({ ...row, monto: Number(row.monto) }));
-    rows.push(...batch);
-    if (batch.length < pageSize) return rows;
-  }
+export async function listAllGestiones(): Promise<GestionesSnapshot> {
+  return readThroughCache(GESTIONES_CACHE_KEY, async () => {
+    const pageSize = 500;
+    const rows: Gestion[] = [];
+    for (let from = 0; ; from += pageSize) {
+      const result = await supabase
+        .from("gestiones")
+        .select("*")
+        .order("fecha", { ascending: false })
+        .order("id", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (result.error && isMissingCobranzaMigration(result.error)) {
+        return { rows: [], migracionPendiente: true };
+      }
+      if (result.error) throw result.error;
+      const batch = ((result.data ?? []) as Gestion[]).map(normalizeGestion);
+      rows.push(...batch);
+      if (batch.length < pageSize) return { rows, migracionPendiente: false };
+    }
+  });
 }
 
 /** Días entre una fecha civil YYYY-MM-DD y hoy (Honduras); ambas se parsean como UTC puro. */
@@ -198,27 +188,21 @@ export async function getRutaCobro(): Promise<RutaCobro> {
   await refreshPortfolioStatuses();
   const { fecha: hoy, inicioIso } = hondurasTodayRange();
 
-  const [clientes, prestamos, cuotasResult, gestionesHoyResult, promesasResult] =
-    await Promise.all([
-      listCustomers(),
-      listLoans(),
-      supabase.from("cuotas").select("*").neq("estado", "pagada"),
-      supabase.from("gestiones").select("*").gte("fecha", inicioIso),
-      listPromesasCobranza(),
-    ]);
-
-  if (cuotasResult.error) throw cuotasResult.error;
-  let migracionPendiente = false;
-  for (const result of [gestionesHoyResult, promesasResult]) {
-    if (result.error && !isMissingCobranzaMigration(result.error)) throw result.error;
-    if (result.error) migracionPendiente = true;
-  }
-  const gestionesHoy = migracionPendiente
-    ? []
-    : ((gestionesHoyResult.data ?? []) as Gestion[]).map(normalizeGestion);
-  const promesas = migracionPendiente
-    ? []
-    : promesasResult.data;
+  const [clientes, prestamos, cuotas, gestionesSnapshot, pagos] = await Promise.all([
+    listCustomers(),
+    listLoans(),
+    listAllInstallments(),
+    listAllGestiones(),
+    listPayments(),
+  ]);
+  const gestionesHoy = gestionesSnapshot.rows.filter((gestion) => gestion.fecha >= inicioIso);
+  const promesas = gestionesSnapshot.rows
+    .filter((gestion) => gestion.resultado === "promesa_pago")
+    .sort((left, right) =>
+      right.fecha.localeCompare(left.fecha)
+      || right.creado_en.localeCompare(left.creado_en)
+      || right.id.localeCompare(left.id)
+    ) as PromesaGestionRow[];
 
   // Primero se conserva solo la promesa más reciente por cliente; una promesa
   // antigua no debe reaparecer si la nueva ya fue cumplida.
@@ -232,10 +216,12 @@ export async function getRutaCobro(): Promise<RutaCobro> {
     (masAntigua, gestion) => gestion.fecha < masAntigua ? gestion.fecha : masAntigua,
     inicioIso,
   );
-  const pagosCobranza = await listPagosCobranzaDesde(pagosDesde);
+  const pagosCobranza: PagoRutaRow[] = pagos
+    .filter((pago) => pago.fecha >= pagosDesde)
+    .map((pago) => ({ id: pago.id, prestamo_id: pago.prestamo_id, fecha: pago.fecha, monto: pago.monto }));
 
   const cuotasPorPrestamo = new Map<string, Cuota[]>();
-  for (const row of (cuotasResult.data ?? []) as Cuota[]) {
+  for (const row of cuotas.filter((cuota) => cuota.estado !== "pagada")) {
     const cuota: Cuota = {
       ...row,
       numero: Number(row.numero),
@@ -308,7 +294,7 @@ export async function getRutaCobro(): Promise<RutaCobro> {
       ruta.push(item);
     }
   }
-  return { clientes: ruta, cartera, migracionPendiente };
+  return { clientes: ruta, cartera, migracionPendiente: gestionesSnapshot.migracionPendiente };
 }
 
 export async function getClienteRuta(clienteId: string): Promise<ClienteRuta | null> {
@@ -328,28 +314,17 @@ export async function getHistorialCobranza(
   clienteId: string,
   prestamoIds: string[]
 ): Promise<HistorialCobranzaItem[]> {
-  const gestionesPromise = supabase
-    .from("gestiones")
-    .select("id,fecha,resultado,monto_prometido,fecha_promesa,notas")
-    .eq("cliente_id", clienteId)
-    .neq("resultado", "pago")
-    .order("fecha", { ascending: false })
-    .limit(30);
-  const pagosPromise = prestamoIds.length
-    ? supabase
-        .from("pagos")
-        .select("id,fecha,monto")
-        .in("prestamo_id", prestamoIds)
-        .order("fecha", { ascending: false })
-        .limit(30)
-    : Promise.resolve({ data: [], error: null });
-  const [gestionesResult, pagosResult] = await Promise.all([gestionesPromise, pagosPromise]);
-  if (gestionesResult.error && !isMissingCobranzaMigration(gestionesResult.error)) {
-    throw gestionesResult.error;
-  }
-  if (pagosResult.error) throw pagosResult.error;
+  const [gestionesSnapshot, allPayments] = await Promise.all([listAllGestiones(), listPayments()]);
+  const gestionRows = gestionesSnapshot.rows
+    .filter((row) => row.cliente_id === clienteId && row.resultado !== "pago")
+    .sort((left, right) => right.fecha.localeCompare(left.fecha))
+    .slice(0, 30);
+  const paymentRows = allPayments
+    .filter((row) => prestamoIds.includes(row.prestamo_id))
+    .sort((left, right) => right.fecha.localeCompare(left.fecha))
+    .slice(0, 30);
 
-  const gestiones: HistorialCobranzaItem[] = (gestionesResult.data ?? []).map((row) => {
+  const gestiones: HistorialCobranzaItem[] = gestionRows.map((row) => {
     const resultado = row.resultado as Exclude<ResultadoGestion, "pago">;
     const monto = row.monto_prometido == null ? null : Number(row.monto_prometido);
     const promesa = resultado === "promesa_pago" && row.fecha_promesa
@@ -365,7 +340,7 @@ export async function getHistorialCobranza(
       pagoId: null,
     };
   });
-  const pagos: HistorialCobranzaItem[] = (pagosResult.data ?? []).map((row) => ({
+  const pagos: HistorialCobranzaItem[] = paymentRows.map((row) => ({
     id: `pago-${row.id}`,
     tipo: "pago",
     fecha: row.fecha,
@@ -388,18 +363,48 @@ export async function registrarGestion(input: {
   notas?: string;
   pagoId?: string;
 }): Promise<void> {
-  const { error } = await supabase.from("gestiones").insert({
+  const capturedAt = new Date().toISOString();
+  const row: Gestion = {
+    id: crypto.randomUUID(),
     cliente_id: input.clienteId,
+    fecha: capturedAt,
     resultado: input.resultado,
     monto_prometido: input.montoPrometido ?? null,
     fecha_promesa: input.fechaPromesa ?? null,
     notas: input.notas?.trim() || null,
     pago_id: input.pagoId ?? null,
-  });
+    creado_en: capturedAt,
+  };
+  let error: { code?: string; message: string } | null = null;
+  if (!navigator.onLine) {
+    error = { message: "Sin conexión" };
+  } else {
+    try {
+      const result = await supabase
+        .from("gestiones")
+        .upsert(row, { onConflict: "id", ignoreDuplicates: true });
+      error = result.error;
+    } catch (cause) {
+      if (!isNetworkFailure(cause)) throw cause;
+      error = { message: cause instanceof Error ? cause.message : "Sin conexión" };
+    }
+  }
   if (error && isMissingCobranzaMigration(error)) {
     throw new Error("Falta aplicar la actualización de cobranza en Supabase.");
   }
-  if (error) throw error;
+  if (error && !isNetworkFailure(error)) throw error;
+  if (error) {
+    await queueOfflineOperation({
+      type: "gestion.create",
+      entityId: row.id,
+      payload: { row },
+      dependsOn: input.pagoId ? [`payment:${input.pagoId}`] : [],
+    });
+  }
+  await updateCache<GestionesSnapshot>(GESTIONES_CACHE_KEY, (snapshot) => ({
+    rows: [row, ...(snapshot?.rows ?? []).filter((item) => item.id !== row.id)],
+    migracionPendiente: false,
+  }));
 }
 
 export type RepartoCobro = {
@@ -472,6 +477,14 @@ export async function cobrarCliente(input: {
 
 export async function guardarOrdenRuta(items: Array<{ id: string; orden_ruta: number }>): Promise<void> {
   if (!items.length) return;
+  if (!navigator.onLine) {
+    await queueOfflineOperation({ type: "route.update", payload: { items }, entityId: "route" });
+    const offlineOrder = new Map(items.map((item) => [item.id, item.orden_ruta]));
+    await updateCache<Cliente[]>(CUSTOMERS_CACHE_KEY, (customers = []) => customers.map((customer) =>
+      offlineOrder.has(customer.id) ? { ...customer, orden_ruta: offlineOrder.get(customer.id)! } : customer
+    ));
+    return;
+  }
   const ids = items.map((item) => item.id);
   const previousResult = await supabase.from("clientes").select("id,orden_ruta").in("id", ids);
   if (previousResult.error) throw previousResult.error;
@@ -489,4 +502,8 @@ export async function guardarOrdenRuta(items: Array<{ id: string; orden_ruta: nu
     }
     updated.push(item.id);
   }
+  const order = new Map(items.map((item) => [item.id, item.orden_ruta]));
+  await updateCache<Cliente[]>(CUSTOMERS_CACHE_KEY, (customers = []) => customers.map((customer) =>
+    order.has(customer.id) ? { ...customer, orden_ruta: order.get(customer.id)! } : customer
+  ));
 }

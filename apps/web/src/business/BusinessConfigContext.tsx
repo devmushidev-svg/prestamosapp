@@ -16,7 +16,7 @@ type BusinessConfigState = {
 const BusinessConfigContext = createContext<BusinessConfigState | null>(null);
 
 export function BusinessConfigProvider({ children }: { children: ReactNode }) {
-  const { session, loading: authLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [config, setConfig] = useState<ConfiguracionPrestamista | null>(null);
   const [status, setStatus] = useState<BusinessConfigStatus>("loading");
   const [error, setError] = useState("");
@@ -24,7 +24,7 @@ export function BusinessConfigProvider({ children }: { children: ReactNode }) {
 
   const reload = useCallback(async () => {
     const requestId = ++requestIdRef.current;
-    if (!session) {
+    if (!user) {
       if (requestId !== requestIdRef.current) return;
       setConfig(null);
       setStatus(authLoading ? "loading" : "ready");
@@ -44,7 +44,7 @@ export function BusinessConfigProvider({ children }: { children: ReactNode }) {
       setStatus("error");
       setError("No pudimos consultar la configuración del negocio.");
     }
-  }, [authLoading, session]);
+  }, [authLoading, user]);
 
   useEffect(() => {
     void reload();

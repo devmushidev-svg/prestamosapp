@@ -5,6 +5,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { BrandLockup, BrandLogo } from "../components/BrandLogo";
+import { OfflineStatus } from "../components/OfflineStatus";
 import { Button } from "../components/ui";
 
 type NavItem = {
@@ -299,7 +300,9 @@ export function AppShell({ children }: { children?: ReactNode }) {
     setSessionError("");
     void logout()
       .then(() => navigate("/login"))
-      .catch(() => setSessionError("No pudimos cerrar la sesión. Inténtelo de nuevo."));
+      .catch((cause) => setSessionError(
+        cause instanceof Error ? cause.message : "No pudimos cerrar la sesión. Inténtelo de nuevo."
+      ));
   }
 
   const ribbonGroups = RIBBON[activeTab].filter((g) => g.items.length > 0);
@@ -307,6 +310,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
 
   return (
     <div className="min-h-screen min-h-dvh flex flex-col bg-transparent">
+      <OfflineStatus />
       {sessionError ? (
         <div
           className="fixed left-1/2 top-4 z-[60] flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded-xl border border-pf-danger/30 bg-pf-danger-soft px-4 py-3 text-sm font-semibold text-pf-danger shadow-lg"

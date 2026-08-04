@@ -6,9 +6,10 @@ import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { BrandLogo } from "../components/BrandLogo";
 import { Button, Card } from "../components/ui";
 import { getCollectionAgenda, type CollectionAgenda } from "../lib/collectionAgendaService";
+import { listCustomers } from "../lib/customerService";
 import { formatMoney } from "../lib/format";
-import { supabase } from "../lib/supabase";
-import { refreshPortfolioStatuses } from "../lib/paymentService";
+import { listLoans } from "../lib/loanService";
+import { listPayments, refreshPortfolioStatuses } from "../lib/paymentService";
 
 const SYM = "L";
 
@@ -231,31 +232,32 @@ export function DashboardPage() {
       const inicioHoyMs = new Date(`${fechaHonduras}T00:00:00-06:00`).getTime();
       const inicioHoy = new Date(inicioHoyMs).toISOString();
       const inicioManana = new Date(inicioHoyMs + 24 * 60 * 60 * 1000).toISOString();
-      const [pr, pa, cl, agenda] = await Promise.all([
-        supabase.from("prestamos").select("monto,saldo,estado"),
-        supabase.from("pagos").select("monto").gte("fecha", inicioHoy).lt("fecha", inicioManana),
-        supabase.from("clientes").select("*"),
+      const [loans, allPayments, customers, agenda] = await Promise.all([
+        listLoans(),
+        listPayments(),
+        listCustomers(),
         getCollectionAgenda({ refreshStatuses: false }).catch(() => null),
       ]);
-      if (pr.error) throw new Error(pr.error.message);
-      if (pa.error) throw new Error(pa.error.message);
-      if (cl.error) throw new Error(cl.error.message);
+      const payments = allPayments.filter((payment) => payment.fecha >= inicioHoy && payment.fecha < inicioManana);
       // ponytail: agregados en el cliente; pasar a una vista SQL cuando la cartera pase de unos miles de préstamos
-      const vivos = pr.data.filter((p) => p.estado !== "cancelado");
+      const vivos = loans.filter((loan) => loan.estado !== "cancelado");
       const conSaldo = vivos.filter((p) => p.estado === "activo" || p.estado === "al_dia" || p.estado === "en_mora");
-      const mora = vivos.filter((p) => p.estado === "en_mora");
+      const overdueLoanIds = agenda
+        ? new Set(agenda.items.filter((item) => item.categoria === "vencidas").map((item) => item.prestamoId))
+        : null;
+      const mora = vivos.filter((p) => overdueLoanIds ? overdueLoanIds.has(p.id) : p.estado === "en_mora");
       if (cancelled) return;
       setAgendaErr(agenda ? "" : "No pudimos cargar las alertas de cobro. Los indicadores principales siguen actualizados.");
       setKpis({
-        clientesActivos: cl.data.filter((customer) => !customer.estado || customer.estado === "activo").length,
+        clientesActivos: customers.filter((customer) => !customer.estado || customer.estado === "activo").length,
         totalPrestado: vivos.reduce((s, p) => s + Number(p.monto), 0),
         prestamosCount: vivos.length,
         porCobrar: conSaldo.reduce((s, p) => s + Number(p.saldo), 0),
         conSaldoCount: conSaldo.length,
         enMora: mora.reduce((s, p) => s + Number(p.saldo), 0),
         moraCount: mora.length,
-        cobradoHoy: pa.data.reduce((s, p) => s + Number(p.monto), 0),
-        pagosHoyCount: pa.data.length,
+        cobradoHoy: payments.reduce((s, payment) => s + Number(payment.monto), 0),
+        pagosHoyCount: payments.length,
         agenda: agenda?.summary ?? null,
       });
     }

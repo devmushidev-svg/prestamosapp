@@ -1,8 +1,7 @@
 import type { Cuota, EstadoPrestamo } from "../types";
-import { listLoans, type PrestamoConCliente } from "./loanService";
+import { listAllInstallments, listLoans, type PrestamoConCliente } from "./loanService";
 import { listPayments, refreshPortfolioStatuses, type PaymentSummary } from "./paymentService";
 import { formatDate, formatLoanNumber, formatPaymentNumber } from "./format";
-import { supabase } from "./supabase";
 
 export type PortfolioReportRow = {
   prestamo: PrestamoConCliente;
@@ -50,14 +49,21 @@ function hondurasBoundary(date: string) {
 
 export async function getPortfolioReport(desde: string, hasta: string): Promise<PortfolioReport> {
   await refreshPortfolioStatuses();
-  const [loans, installmentResult, allPayments] = await Promise.all([
+  const [loans, installmentRows, allPayments] = await Promise.all([
     listLoans(),
-    supabase.from("cuotas").select("*").order("fecha_vencimiento"),
+    listAllInstallments() as Promise<Cuota[]>,
     listPayments(),
   ]);
-  if (installmentResult.error) throw installmentResult.error;
 
-  const installments = ((installmentResult.data ?? []) as Cuota[]).map(normalizeInstallment);
+  const installments = installmentRows
+    .map(normalizeInstallment)
+    .sort(
+      (left, right) =>
+        left.fecha_vencimiento.localeCompare(right.fecha_vencimiento) ||
+        left.prestamo_id.localeCompare(right.prestamo_id) ||
+        left.numero - right.numero ||
+        left.id.localeCompare(right.id)
+    );
   const legacyPaidByInstallment = new Map<string, number>();
   for (const payment of allPayments) {
     if (!payment.cuota_id) continue;
@@ -73,6 +79,13 @@ export async function getPortfolioReport(desde: string, hasta: string): Promise<
     installmentMap.set(installment.prestamo_id, current);
   }
 
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Tegucigalpa",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
   const rows = loans.map((prestamo): PortfolioReportRow => {
     const loanInstallments = installmentMap.get(prestamo.id) ?? [];
     const totalPactado = loanInstallments.reduce((sum, installment) => sum + installment.monto, 0);
@@ -86,7 +99,7 @@ export async function getPortfolioReport(desde: string, hasta: string): Promise<
       )
     );
     const vencido = loanInstallments
-      .filter((installment) => installment.estado === "vencida")
+      .filter((installment) => pendingFor(installment) > 0 && installment.fecha_vencimiento < today)
       .reduce((sum, installment) => sum + pendingFor(installment), 0);
     const interesPactado = Math.max(0, totalPactado - Number(prestamo.monto));
     const interesCobradoEstimado = totalPactado > 0
@@ -94,7 +107,9 @@ export async function getPortfolioReport(desde: string, hasta: string): Promise<
       : 0;
     const proximaCuota = loanInstallments.find((installment) => pendingFor(installment) > 0)?.fecha_vencimiento ?? null;
     return {
-      prestamo,
+      prestamo: prestamo.estado !== "cancelado" && pendiente > 0
+        ? { ...prestamo, estado: vencido > 0 ? "en_mora" : "al_dia" }
+        : prestamo,
       totalPactado,
       pagado,
       pendiente,

@@ -1,5 +1,11 @@
 import { supabase } from "./supabase";
 import type { Cliente, EstadoCliente } from "../types";
+import {
+  isNetworkFailure,
+  queueOfflineOperation,
+  readThroughCache,
+  updateCache,
+} from "./offlineDb";
 
 export type CustomerInput = {
   nombre: string;
@@ -41,6 +47,7 @@ function normalizeCustomer(row: Partial<Cliente> & Pick<Cliente, "id" | "nombre"
 }
 
 const FACHADAS_BUCKET = "fachadas";
+export const CUSTOMERS_CACHE_KEY = "customers";
 
 export async function getFacadePhotoUrl(path: string | null): Promise<string | null> {
   if (!path) return null;
@@ -54,6 +61,9 @@ export async function uploadFacadePhoto(
   file: File,
   previousPath?: string | null
 ): Promise<string> {
+  if (!navigator.onLine) {
+    throw new Error("La foto de fachada necesita Internet. Guarde primero la ficha y súbala cuando vuelva la conexión.");
+  }
   const allowed = new Set(["image/jpeg", "image/png", "image/webp"]);
   if (!allowed.has(file.type)) throw new Error("Use una foto JPG, PNG o WebP.");
   if (file.size > 10 * 1024 * 1024) throw new Error("La foto no puede superar 10 MB.");
@@ -88,17 +98,19 @@ export async function uploadFacadePhoto(
 }
 
 export async function listCustomers(): Promise<Cliente[]> {
-  const full = await supabase.from("clientes").select(FULL_SELECT).order("nombre");
-  if (!full.error) return (full.data ?? []).map((row) => normalizeCustomer(row as Cliente));
-  if (!isMissingExtendedColumns(full.error)) throw full.error;
+  return readThroughCache(CUSTOMERS_CACHE_KEY, async () => {
+    const full = await supabase.from("clientes").select(FULL_SELECT).order("nombre");
+    if (!full.error) return (full.data ?? []).map((row) => normalizeCustomer(row as Cliente));
+    if (!isMissingExtendedColumns(full.error)) throw full.error;
 
-  const extended = await supabase.from("clientes").select(EXTENDED_SELECT).order("nombre");
-  if (!extended.error) return (extended.data ?? []).map((row) => normalizeCustomer(row as Cliente));
-  if (!isMissingExtendedColumns(extended.error)) throw extended.error;
+    const extended = await supabase.from("clientes").select(EXTENDED_SELECT).order("nombre");
+    if (!extended.error) return (extended.data ?? []).map((row) => normalizeCustomer(row as Cliente));
+    if (!isMissingExtendedColumns(extended.error)) throw extended.error;
 
-  const legacy = await supabase.from("clientes").select(LEGACY_SELECT).order("nombre");
-  if (legacy.error) throw legacy.error;
-  return (legacy.data ?? []).map((row) => normalizeCustomer(row as Pick<Cliente, "id" | "nombre" | "identidad" | "telefono" | "direccion" | "notas" | "creado_en">));
+    const legacy = await supabase.from("clientes").select(LEGACY_SELECT).order("nombre");
+    if (legacy.error) throw legacy.error;
+    return (legacy.data ?? []).map((row) => normalizeCustomer(row as Pick<Cliente, "id" | "nombre" | "identidad" | "telefono" | "direccion" | "notas" | "creado_en">));
+  });
 }
 
 function optionalText(value: string) {
@@ -106,7 +118,9 @@ function optionalText(value: string) {
 }
 
 export async function saveCustomer(input: CustomerInput, id?: string): Promise<void> {
+  const customerId = id ?? crypto.randomUUID();
   const row = {
+    id: customerId,
     nombre: input.nombre.trim(),
     identidad: optionalText(input.identidad),
     telefono: optionalText(input.telefono),
@@ -117,14 +131,48 @@ export async function saveCustomer(input: CustomerInput, id?: string): Promise<v
     estado: input.estado,
     notas: optionalText(input.notas),
   };
-  const result = id
-    ? await supabase.from("clientes").update(row).eq("id", id)
-    : await supabase.from("clientes").insert(row);
-  if (!result.error) return;
+  let result: { error: { code?: string; message?: string } | null };
+  if (!navigator.onLine) {
+    result = { error: { message: "Sin conexión" } };
+  } else {
+    try {
+      result = id
+        ? await supabase.from("clientes").update(row).eq("id", id)
+        : await supabase.from("clientes").insert(row);
+    } catch (cause) {
+      if (!isNetworkFailure(cause)) throw cause;
+      result = { error: { message: cause instanceof Error ? cause.message : "Sin conexión" } };
+    }
+  }
+  let queued = false;
+  if (result.error && (!navigator.onLine || isNetworkFailure(result.error))) {
+    await queueOfflineOperation({
+      type: "customer.upsert",
+      payload: { row },
+      entityId: customerId,
+    });
+    queued = true;
+  }
+  if (!result.error || queued) {
+    await updateCache<Cliente[]>(CUSTOMERS_CACHE_KEY, (customers = []) => {
+      const previous = customers.find((customer) => customer.id === customerId);
+      const next = normalizeCustomer({
+        ...previous,
+        ...row,
+        foto_fachada_path: previous?.foto_fachada_path ?? null,
+        orden_ruta: previous?.orden_ruta ?? null,
+        creado_en: previous?.creado_en ?? new Date().toISOString(),
+      } as Cliente);
+      return [...customers.filter((customer) => customer.id !== customerId), next]
+        .sort((left, right) => left.nombre.localeCompare(right.nombre, "es-HN"));
+    });
+    return;
+  }
   if (isMissingExtendedColumns(result.error)) {
     const canUseLegacy = !row.lugar_trabajo && !row.referencias && !row.colonia && row.estado === "activo";
     if (canUseLegacy) {
       const legacyRow = {
+        id: customerId,
         nombre: row.nombre,
         identidad: row.identidad,
         telefono: row.telefono,
@@ -134,7 +182,19 @@ export async function saveCustomer(input: CustomerInput, id?: string): Promise<v
       const legacyResult = id
         ? await supabase.from("clientes").update(legacyRow).eq("id", id)
         : await supabase.from("clientes").insert(legacyRow);
-      if (!legacyResult.error) return;
+      if (!legacyResult.error) {
+        await updateCache<Cliente[]>(CUSTOMERS_CACHE_KEY, (customers = []) => {
+          const previous = customers.find((customer) => customer.id === customerId);
+          const next = normalizeCustomer({
+            ...previous,
+            ...legacyRow,
+            creado_en: previous?.creado_en ?? new Date().toISOString(),
+          } as Cliente);
+          return [...customers.filter((customer) => customer.id !== customerId), next]
+            .sort((left, right) => left.nombre.localeCompare(right.nombre, "es-HN"));
+        });
+        return;
+      }
       throw legacyResult.error;
     }
     throw new Error("Falta aplicar la actualización consolidada en Supabase.");

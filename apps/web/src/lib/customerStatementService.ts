@@ -5,9 +5,11 @@ import type {
   Pago,
   Prestamo,
 } from "../types";
+import { listCustomers } from "./customerService";
 import { formatDate, formatDateOnly, formatLoanNumber, formatMoney, formatPaymentNumber } from "./format";
 import { formatLoanPlan } from "./loanCalculator";
-import { supabase } from "./supabase";
+import { listAllInstallments, listLoans } from "./loanService";
+import { listPayments } from "./paymentService";
 
 export type CustomerStatementLoan = Prestamo & {
   cuotas: Cuota[];
@@ -43,47 +45,6 @@ type RawStatementLoan = Prestamo & {
   cuotas: Cuota[] | null;
   pagos: Pago[] | null;
 };
-
-const CUSTOMER_SELECT = "id,nombre,identidad,telefono,direccion,colonia,lugar_trabajo,referencias,foto_fachada_path,estado,notas,orden_ruta,creado_en";
-const EXTENDED_CUSTOMER_SELECT = "id,nombre,identidad,telefono,direccion,colonia,lugar_trabajo,referencias,estado,notas,orden_ruta,creado_en";
-const LEGACY_CUSTOMER_SELECT = "id,nombre,identidad,telefono,direccion,notas,creado_en";
-
-function isMissingExtendedCustomerColumns(error: { code?: string; message?: string }) {
-  return error.code === "PGRST204" || error.code === "42703" ||
-    Boolean(error.message?.includes("lugar_trabajo") || error.message?.includes("referencias") || error.message?.includes("foto_fachada_path") || error.message?.includes("estado") || error.message?.includes("colonia") || error.message?.includes("orden_ruta"));
-}
-
-function normalizeCustomer(row: Partial<Cliente> & Pick<Cliente, "id" | "nombre" | "creado_en">): Cliente {
-  return {
-    id: row.id,
-    nombre: row.nombre,
-    identidad: row.identidad ?? null,
-    telefono: row.telefono ?? null,
-    direccion: row.direccion ?? null,
-    colonia: row.colonia ?? null,
-    lugar_trabajo: row.lugar_trabajo ?? null,
-    referencias: row.referencias ?? null,
-    foto_fachada_path: row.foto_fachada_path ?? null,
-    estado: row.estado ?? "activo",
-    notas: row.notas ?? null,
-    orden_ruta: row.orden_ruta ?? null,
-    creado_en: row.creado_en,
-  };
-}
-
-async function getCustomer(clienteId: string): Promise<Cliente> {
-  const current = await supabase.from("clientes").select(CUSTOMER_SELECT).eq("id", clienteId).single();
-  if (!current.error) return normalizeCustomer(current.data as Cliente);
-  if (!isMissingExtendedCustomerColumns(current.error)) throw current.error;
-
-  const extended = await supabase.from("clientes").select(EXTENDED_CUSTOMER_SELECT).eq("id", clienteId).single();
-  if (!extended.error) return normalizeCustomer(extended.data as Cliente);
-  if (!isMissingExtendedCustomerColumns(extended.error)) throw extended.error;
-
-  const legacy = await supabase.from("clientes").select(LEGACY_CUSTOMER_SELECT).eq("id", clienteId).single();
-  if (legacy.error) throw legacy.error;
-  return normalizeCustomer(legacy.data as Pick<Cliente, "id" | "nombre" | "identidad" | "telefono" | "direccion" | "notas" | "creado_en">);
-}
 
 function normalizeInstallment(row: Cuota): Cuota {
   const amount = Number(row.monto);
@@ -175,18 +136,36 @@ function normalizeLoan(row: RawStatementLoan, today: string): CustomerStatementL
 
 export async function getCustomerStatement(clienteId: string): Promise<CustomerStatement> {
   if (!clienteId.trim()) throw new Error("El cliente no es válido.");
-  const [cliente, loansResult] = await Promise.all([
-    getCustomer(clienteId),
-    supabase
-      .from("prestamos")
-      .select("*,cuotas(*),pagos(*)")
-      .eq("cliente_id", clienteId)
-      .order("creado_en", { ascending: false }),
+  const [customers, allLoans, allInstallments, allPayments] = await Promise.all([
+    listCustomers(),
+    listLoans(),
+    listAllInstallments() as Promise<Cuota[]>,
+    listPayments(),
   ]);
-  if (loansResult.error) throw loansResult.error;
+  const cliente = customers.find((customer) => customer.id === clienteId);
+  if (!cliente) throw new Error("El cliente no existe.");
+
+  const installmentsByLoan = new Map<string, Cuota[]>();
+  for (const installment of allInstallments) {
+    const current = installmentsByLoan.get(installment.prestamo_id) ?? [];
+    current.push(installment);
+    installmentsByLoan.set(installment.prestamo_id, current);
+  }
+  const paymentsByLoan = new Map<string, Pago[]>();
+  for (const payment of allPayments) {
+    const current = paymentsByLoan.get(payment.prestamo_id) ?? [];
+    current.push(payment);
+    paymentsByLoan.set(payment.prestamo_id, current);
+  }
 
   const today = hondurasToday();
-  const prestamos = ((loansResult.data ?? []) as RawStatementLoan[]).map((row) => normalizeLoan(row, today));
+  const prestamos = allLoans
+    .filter((loan) => loan.cliente_id === clienteId)
+    .map((loan) => normalizeLoan({
+      ...loan,
+      cuotas: installmentsByLoan.get(loan.id) ?? [],
+      pagos: paymentsByLoan.get(loan.id) ?? [],
+    }, today));
   const vigentes = prestamos.filter((loan) => loan.estado !== "cancelado");
   const pagos = prestamos
     .flatMap((loan) => loan.pagos.map((payment): CustomerStatementPayment => ({
