@@ -95,6 +95,10 @@ Moneda: Lempira, símbolo `L` (`formatMoney` en
 7. ✅ Agenda de cobros (vencidos, hoy y próximos 7 días), recordatorios
    manuales por WhatsApp, alertas accionables en el panel y estado de cuenta
    A4/PDF por cliente.
+8. ✅ PWA instalable con copia IndexedDB por usuario, operación offline de
+   clientes/préstamos/pagos/cobranza, recibos provisionales y cola idempotente
+   que se sincroniza al recuperar Internet. Guía operativa en
+   [`MODO_OFFLINE.md`](MODO_OFFLINE.md).
 
 El porcentaje de mora de 1.5 % queda guardado como condición en los préstamos
 nuevos, pero todavía no se agrega automáticamente al saldo. Falta confirmar la

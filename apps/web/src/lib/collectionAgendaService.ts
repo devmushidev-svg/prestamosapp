@@ -1,8 +1,7 @@
 import type { Cuota } from "../types";
-import { listLoans, type PrestamoConCliente } from "./loanService";
+import { listAllInstallments, listLoans, type PrestamoConCliente } from "./loanService";
 import { moneyToCents } from "./paymentAllocator";
 import { refreshPortfolioStatuses } from "./paymentService";
-import { supabase } from "./supabase";
 
 const HONDURAS_TIME_ZONE = "America/Tegucigalpa";
 
@@ -149,25 +148,16 @@ function summarize(items: AgendaItem[], uniqueLoans = false): AgendaSummary {
   };
 }
 
-const PAGE_SIZE = 500;
-
 async function listInstallmentsThrough(through: string): Promise<RawInstallment[]> {
-  const rows: RawInstallment[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const result = await supabase
-      .from("cuotas")
-      .select("id,prestamo_id,numero,fecha_vencimiento,monto,monto_pagado,estado")
-      .lte("fecha_vencimiento", through)
-      .order("fecha_vencimiento", { ascending: true })
-      .order("prestamo_id", { ascending: true })
-      .order("numero", { ascending: true })
-      .order("id", { ascending: true })
-      .range(from, from + PAGE_SIZE - 1);
-    if (result.error) throw result.error;
-    const batch = (result.data ?? []) as RawInstallment[];
-    rows.push(...batch);
-    if (batch.length < PAGE_SIZE) return rows;
-  }
+  return ((await listAllInstallments()) as Cuota[])
+    .filter((installment) => installment.fecha_vencimiento <= through)
+    .sort(
+      (left, right) =>
+        left.fecha_vencimiento.localeCompare(right.fecha_vencimiento) ||
+        left.prestamo_id.localeCompare(right.prestamo_id) ||
+        Number(left.numero) - Number(right.numero) ||
+        left.id.localeCompare(right.id)
+    );
 }
 
 /**

@@ -6,7 +6,7 @@ import { BrandLogo } from "../components/BrandLogo";
 import { Button, Card, Field, Input } from "../components/ui";
 
 export function LoginPage() {
-  const { login, session, loading } = useAuth();
+  const { login, user, loading } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -15,8 +15,8 @@ export function LoginPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!loading && session) navigate("/", { replace: true });
-  }, [loading, session, navigate]);
+    if (!loading && user) navigate("/", { replace: true });
+  }, [loading, user, navigate]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();

@@ -1,4 +1,4 @@
-import { ArrowLeft, CheckCircle2, ImageIcon, Plus, Printer, ReceiptText } from "lucide-react";
+import { ArrowLeft, CheckCircle2, CloudOff, ImageIcon, Plus, Printer, ReceiptText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useBusinessConfig } from "../business/BusinessConfigContext";
@@ -190,7 +190,9 @@ export function PaymentReceiptPage() {
     setError("");
     try {
       const details = await getPaymentDetails(receiptIds.length ? receiptIds : [paymentId]);
-      const current = details.find((item) => item.pago.id === paymentId);
+      const current = details.find((item) =>
+        item.pago.id === paymentId || item.pago.solicitud_id === paymentId
+      );
       if (!current) throw new Error("El recibo solicitado no pertenece a este cobro.");
       setDetail(current);
       setBatchDetails(details);
@@ -260,6 +262,7 @@ export function PaymentReceiptPage() {
     };
   }, [batchDetails, config, navigationState.saldoClienteAnterior, navigationState.saldoClienteRestante]);
   const emitData: DatosEmitibles | null = consolidatedReceiptData ?? receiptData;
+  const provisional = Boolean(detail?.pago.recibo?.startsWith("PEND-"));
   const receiptImageKey = useMemo(() => emitData ? JSON.stringify(emitData) : "", [emitData]);
   const receiptImage = preparedImage?.key === receiptImageKey ? preparedImage.file : null;
   const preparingImage = Boolean(emitData && !receiptImage && imageErrorKey !== receiptImageKey);
@@ -331,6 +334,14 @@ export function PaymentReceiptPage() {
 
   return (
     <div className="mx-auto max-w-md space-y-4 pf-safe-page print:max-w-none">
+      {provisional ? (
+        <div className="rounded-xl border border-pf-warning/30 bg-pf-warning-soft px-4 py-3 text-sm font-semibold text-pf-warning" role="status">
+          <p className="flex items-center gap-2"><CloudOff className="h-5 w-5" strokeWidth={2} aria-hidden />Comprobante provisional</p>
+          <p className="mt-1 pl-7 text-xs font-medium leading-relaxed">
+            El pago está guardado en este dispositivo. Al recuperar Internet se sincronizará y recibirá su número REC oficial.
+          </p>
+        </div>
+      ) : null}
       {showCreated ? (
         <div className="rounded-xl border border-pf-success-soft bg-pf-success-soft/60 px-4 py-3 text-sm font-semibold text-pf-success" role="status">
           <p className="flex items-center gap-2"><CheckCircle2 className="h-5 w-5" strokeWidth={2} aria-hidden />{recibosCobranza.length > 1 ? "Cobro registrado correctamente" : "Pago registrado correctamente"}</p>

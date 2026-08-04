@@ -104,6 +104,10 @@ Moneda: Lempira, símbolo `L` (`formatMoney` en
    semanas de atraso, visitados/no visitados del día, filtro por colonia,
    orden por criterios y orden manual; ficha de gestión del cliente; pantalla
    de abono a nivel cliente y gestión sin cobro con promesa de pago.
+9. ✅ PWA instalable con copia IndexedDB por usuario, operación offline de
+   clientes/préstamos/pagos/cobranza, recibos provisionales y cola idempotente
+   que se sincroniza al recuperar Internet. Guía operativa en
+   [`MODO_OFFLINE.md`](MODO_OFFLINE.md).
 
 El porcentaje de mora de 1.5 % queda guardado como condición en los préstamos
 nuevos, pero todavía no se agrega automáticamente al saldo. Falta confirmar la
@@ -116,8 +120,9 @@ aprobación. No bloquearon las funciones operativas actuales.
 
 La ruta se abre en Google Maps usando las direcciones guardadas, sin necesitar
 una llave adicional, y cada ficha admite una foto privada de la fachada. La
-cobranza es **solo en línea**: no hay cola offline; si falla la red, el cobro
-se reintenta con la misma solicitud y nunca se duplica.
+cobranza puede operar sin conexión con la copia local; al volver Internet, la
+cola usa la misma solicitud y nunca duplica el cobro. Subir o reemplazar fotos
+sí requiere conexión.
 
 ## Recibos / impresión
 

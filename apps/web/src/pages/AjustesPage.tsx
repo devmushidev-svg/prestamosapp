@@ -1,5 +1,7 @@
 import { Check, Palette } from "lucide-react";
 import { PageHero } from "../components/PageHero";
+import { PwaInstallCard } from "../components/PwaInstallCard";
+import { OfflineControlCard } from "../components/OfflineControlCard";
 import { Card } from "../components/ui";
 import { PF_THEME_PRESETS, type PfThemeId } from "../theme/pfTheme";
 import { usePfTheme } from "../theme/ThemeProvider";
@@ -63,6 +65,10 @@ export function AjustesPage() {
         <p className="pf-page-lead">Preferencias de la aplicación en este dispositivo.</p>
         <p className="pf-page-lead-muted">Aquí iremos agregando más opciones conforme crezca el sistema.</p>
       </PageHero>
+
+      <PwaInstallCard />
+
+      <OfflineControlCard />
 
       <Card className="p-5 md:p-6">
         <div className="flex items-center gap-2.5">

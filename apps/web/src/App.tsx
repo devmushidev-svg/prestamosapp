@@ -32,7 +32,7 @@ function RouteFallback() {
 }
 
 function Protected({ children }: { children: ReactNode }) {
-  const { session, loading } = useAuth();
+  const { user, loading } = useAuth();
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-pf-surface text-pf-muted">
@@ -40,7 +40,7 @@ function Protected({ children }: { children: ReactNode }) {
       </div>
     );
   }
-  if (!session) return <Navigate to="/login" replace />;
+  if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
