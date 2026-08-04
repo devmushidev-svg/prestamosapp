@@ -162,6 +162,30 @@ export async function getLoanDetail(id: string): Promise<PrestamoDetalle> {
   }
 }
 
+export async function cacheLoanSnapshot(detail: PrestamoDetalle): Promise<void> {
+  const { cuotas, ...loan } = detail;
+  await Promise.all([
+    updateCache<PrestamoConCliente[]>(LOANS_CACHE_KEY, (loans = []) => {
+      const next = [...loans];
+      const index = next.findIndex((item) => item.id === loan.id);
+      if (index >= 0) next[index] = loan;
+      else next.push(loan);
+      return next.sort((left, right) =>
+        right.creado_en.localeCompare(left.creado_en) || left.id.localeCompare(right.id)
+      );
+    }),
+    updateCache<Cuota[]>(INSTALLMENTS_CACHE_KEY, (installments = []) =>
+      [...installments.filter((item) => item.prestamo_id !== loan.id), ...cuotas]
+        .sort((left, right) =>
+          left.fecha_vencimiento.localeCompare(right.fecha_vencimiento)
+          || left.prestamo_id.localeCompare(right.prestamo_id)
+          || left.numero - right.numero
+        )
+    ),
+    writeCache<PrestamoDetalle>(loanDetailCacheKey(loan.id), detail),
+  ]);
+}
+
 function isMissingCreateLoanRpc(error: { code?: string; message?: string }): boolean {
   return error.code === "PGRST202" || error.code === "42883";
 }
@@ -194,7 +218,15 @@ export async function createFixedLoan(
     error = { message: "Sin conexión" };
   }
 
-  if (!error && typeof data === "string") return { id: data, calculation };
+  if (!error && typeof data === "string") {
+    try {
+      await cacheLoanSnapshot(await getLoanDetail(data));
+    } catch {
+      // El préstamo ya fue confirmado; la copia se completará en la siguiente sincronización.
+      console.warn("No se pudo actualizar la copia offline del préstamo confirmado.");
+    }
+    return { id: data, calculation };
+  }
   if (error && isNetworkFailure(error)) {
     const localId = input.solicitudId;
     const cliente = (await listCustomersForLoan()).find((item) => item.id === input.clienteId) ?? null;
@@ -245,17 +277,7 @@ export async function createFixedLoan(
         },
       },
     });
-    await Promise.all([
-      updateCache<PrestamoConCliente[]>(LOANS_CACHE_KEY, (loans = []) => [
-        localLoan,
-        ...loans.filter((loan) => loan.id !== localId),
-      ]),
-      updateCache<Cuota[]>(INSTALLMENTS_CACHE_KEY, (installments = []) => [
-        ...installments.filter((item) => item.prestamo_id !== localId),
-        ...localInstallments,
-      ]),
-      writeCache<PrestamoDetalle>(loanDetailCacheKey(localId), { ...localLoan, cuotas: localInstallments }),
-    ]);
+    await cacheLoanSnapshot({ ...localLoan, cuotas: localInstallments });
     return { id: localId, calculation };
   }
   if (error && isMissingCreateLoanRpc(error)) {

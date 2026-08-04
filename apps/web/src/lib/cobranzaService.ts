@@ -477,33 +477,42 @@ export async function cobrarCliente(input: {
 
 export async function guardarOrdenRuta(items: Array<{ id: string; orden_ruta: number }>): Promise<void> {
   if (!items.length) return;
-  if (!navigator.onLine) {
-    await queueOfflineOperation({ type: "route.update", payload: { items }, entityId: "route" });
+  const saveLocalOrder = async (queue: boolean) => {
+    if (queue) {
+      await queueOfflineOperation({ type: "route.update", payload: { items }, entityId: "route" });
+    }
     const offlineOrder = new Map(items.map((item) => [item.id, item.orden_ruta]));
     await updateCache<Cliente[]>(CUSTOMERS_CACHE_KEY, (customers = []) => customers.map((customer) =>
       offlineOrder.has(customer.id) ? { ...customer, orden_ruta: offlineOrder.get(customer.id)! } : customer
     ));
+  };
+  if (!navigator.onLine) {
+    await saveLocalOrder(true);
     return;
   }
-  const ids = items.map((item) => item.id);
-  const previousResult = await supabase.from("clientes").select("id,orden_ruta").in("id", ids);
-  if (previousResult.error) throw previousResult.error;
-  const previous = new Map((previousResult.data ?? []).map((item) => [item.id, item.orden_ruta]));
-  const updated: string[] = [];
-  for (const item of items) {
-    const result = await supabase.from("clientes").update({ orden_ruta: item.orden_ruta }).eq("id", item.id);
-    if (result.error) {
-      // Supabase REST no agrupa varios UPDATE en una transacción. Si uno falla,
-      // se restauran los ya aplicados para no dejar posiciones duplicadas.
-      await Promise.allSettled(updated.map((id) =>
-        supabase.from("clientes").update({ orden_ruta: previous.get(id) ?? null }).eq("id", id)
-      ));
-      throw result.error;
+
+  try {
+    const ids = items.map((item) => item.id);
+    const previousResult = await supabase.from("clientes").select("id,orden_ruta").in("id", ids);
+    if (previousResult.error) throw previousResult.error;
+    const previous = new Map((previousResult.data ?? []).map((item) => [item.id, item.orden_ruta]));
+    const updated: string[] = [];
+    for (const item of items) {
+      const result = await supabase.from("clientes").update({ orden_ruta: item.orden_ruta }).eq("id", item.id);
+      if (result.error) {
+        // Supabase REST no agrupa varios UPDATE en una transacción. Si uno falla,
+        // se restauran los ya aplicados para no dejar posiciones duplicadas.
+        await Promise.allSettled(updated.map((id) =>
+          supabase.from("clientes").update({ orden_ruta: previous.get(id) ?? null }).eq("id", id)
+        ));
+        throw result.error;
+      }
+      updated.push(item.id);
     }
-    updated.push(item.id);
+  } catch (cause) {
+    if (!isNetworkFailure(cause)) throw cause;
+    await saveLocalOrder(true);
+    return;
   }
-  const order = new Map(items.map((item) => [item.id, item.orden_ruta]));
-  await updateCache<Cliente[]>(CUSTOMERS_CACHE_KEY, (customers = []) => customers.map((customer) =>
-    order.has(customer.id) ? { ...customer, orden_ruta: order.get(customer.id)! } : customer
-  ));
+  await saveLocalOrder(false);
 }

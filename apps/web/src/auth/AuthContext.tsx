@@ -1,6 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { countOfflineOperations, setOfflineUserScope } from "../lib/offlineDb";
+import { countOfflineOperations, isNetworkFailure, setOfflineUserScope } from "../lib/offlineDb";
 import { supabase } from "../lib/supabase";
 
 export type UserInfo = {
@@ -62,60 +62,135 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [offlineUser, setOfflineUser] = useState<UserInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const logoutRequestedRef = useRef(false);
+  const lastAccessTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const useSession = (nextSession: Session | null) => {
-      const nextUser = toUserInfo(nextSession);
-      setSession(nextSession);
-      if (nextUser) {
-        setOfflineUser(null);
-        rememberOfflineUser(nextUser);
-        setOfflineUserScope(nextUser.id);
-        return;
-      }
+    let disposed = false;
+    const signOutVerifications = new Set<string>();
+    const verificationTimers = new Set<number>();
+
+    const useOfflineIdentity = () => {
       const cached = readOfflineUser();
-      if (!navigator.onLine && cached) {
-        setOfflineUser(cached);
-        setOfflineUserScope(cached.id);
-      } else {
-        setOfflineUser(null);
-        if (navigator.onLine) rememberOfflineUser(null);
-        setOfflineUserScope(null);
-      }
-    };
-
-    supabase.auth
-      .getSession()
-      .then(({ data }) => useSession(data.session))
-      .catch(() => {
-        const cached = readOfflineUser();
-        if (cached) {
-          setOfflineUser(cached);
-          setOfflineUserScope(cached.id);
-        } else {
-          setSession(null);
-          setOfflineUserScope(null);
-        }
-      })
-      .finally(() => setLoading(false));
-
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (nextSession) {
-        useSession(nextSession);
-      } else if (navigator.onLine) {
-        setSession(null);
+      setSession(null);
+      if (!cached) {
         setOfflineUser(null);
         rememberOfflineUser(null);
         setOfflineUserScope(null);
+        return false;
       }
+      setOfflineUser(cached);
+      setOfflineUserScope(cached.id);
+      return true;
+    };
+
+    const clearIdentity = () => {
+      setSession(null);
+      setOfflineUser(null);
+      rememberOfflineUser(null);
+      setOfflineUserScope(null);
+      lastAccessTokenRef.current = null;
+    };
+
+    const useSession = (nextSession: Session) => {
+      const nextUser = toUserInfo(nextSession);
+      setSession(nextSession);
+      setOfflineUser(null);
+      lastAccessTokenRef.current = nextSession.access_token;
+      if (!nextUser) return;
+      rememberOfflineUser(nextUser);
+      setOfflineUserScope(nextUser.id);
+    };
+
+    const verifyUnexpectedSignOut = (accessToken: string) => {
+      if (signOutVerifications.has(accessToken)) return;
+      signOutVerifications.add(accessToken);
+      void supabase.auth.getUser(accessToken)
+        .then(({ error }) => {
+          if (disposed || lastAccessTokenRef.current !== accessToken) return;
+          if (!navigator.onLine || (error && isNetworkFailure(error))) useOfflineIdentity();
+          else clearIdentity();
+        })
+        .catch((cause) => {
+          if (disposed || lastAccessTokenRef.current !== accessToken) return;
+          if (!navigator.onLine || isNetworkFailure(cause)) useOfflineIdentity();
+          else clearIdentity();
+        })
+        .finally(() => {
+          signOutVerifications.delete(accessToken);
+        });
+    };
+
+    const scheduleUnexpectedSignOutVerification = (accessToken: string) => {
+      const timerId = window.setTimeout(() => {
+        verificationTimers.delete(timerId);
+        verifyUnexpectedSignOut(accessToken);
+      }, 0);
+      verificationTimers.add(timerId);
+    };
+
+    // No se espera el reintento de Supabase (puede tardar ~30 s con un token
+    // vencido). Si el navegador sabe que no hay red, se abre la copia local de
+    // inmediato y la sesión remota se comprueba en segundo plano.
+    if (!navigator.onLine) {
+      useOfflineIdentity();
+      setLoading(false);
+    }
+
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (disposed) return;
+        if (data.session) {
+          useSession(data.session);
+          return;
+        }
+        if ((!navigator.onLine || (error && isNetworkFailure(error))) && useOfflineIdentity()) return;
+        clearIdentity();
+      })
+      .catch((cause) => {
+        if (disposed) return;
+        if (!navigator.onLine || isNetworkFailure(cause)) useOfflineIdentity();
+        else clearIdentity();
+      })
+      .finally(() => {
+        if (!disposed) setLoading(false);
+      });
+
+    const { data: subscription } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (nextSession) {
+        useSession(nextSession);
+        return;
+      }
+      // La comprobación inicial ya está en curso arriba. Dejar que termine evita
+      // borrar la identidad local cuando el navegador dice estar online pero no
+      // consigue llegar a Supabase.
+      if (event === "INITIAL_SESSION") return;
+      if (logoutRequestedRef.current) {
+        clearIdentity();
+        return;
+      }
+      if (!navigator.onLine) {
+        useOfflineIdentity();
+        return;
+      }
+      const accessToken = lastAccessTokenRef.current;
+      if (accessToken) scheduleUnexpectedSignOutVerification(accessToken);
+      else clearIdentity();
     });
     const handleOnline = () => {
       void supabase.auth.getSession()
-        .then(({ data }) => useSession(data.session))
-        .catch(() => undefined);
+        .then(({ data, error }) => {
+          if (data.session) useSession(data.session);
+          else if (error && isNetworkFailure(error)) useOfflineIdentity();
+          else clearIdentity();
+        })
+        .catch(() => useOfflineIdentity());
     };
     window.addEventListener("online", handleOnline);
     return () => {
+      disposed = true;
+      verificationTimers.forEach((timerId) => window.clearTimeout(timerId));
       window.removeEventListener("online", handleOnline);
       subscription.subscription.unsubscribe();
     };
@@ -143,12 +218,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (pending > 0) {
       throw new Error("Hay operaciones pendientes. Conéctese y sincronice antes de cerrar sesión.");
     }
-    const { error } = await supabase.auth.signOut({ scope: "local" });
-    if (error) throw new Error("No se pudo cerrar la sesión.");
-    setSession(null);
-    setOfflineUser(null);
-    rememberOfflineUser(null);
-    setOfflineUserScope(null);
+    logoutRequestedRef.current = true;
+    try {
+      const { error } = await supabase.auth.signOut({ scope: "local" });
+      if (error) throw new Error("No se pudo cerrar la sesión.");
+      setSession(null);
+      setOfflineUser(null);
+      rememberOfflineUser(null);
+      setOfflineUserScope(null);
+      lastAccessTokenRef.current = null;
+    } finally {
+      logoutRequestedRef.current = false;
+    }
   }, []);
 
   const sessionUser = useMemo(() => toUserInfo(session), [session]);

@@ -62,8 +62,8 @@ export function AjustesPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-2 py-4 pf-safe-page md:px-4 md:py-6">
       <PageHero title="Configuraciones">
-        <p className="pf-page-lead">Preferencias de la aplicación en este dispositivo.</p>
-        <p className="pf-page-lead-muted">Aquí iremos agregando más opciones conforme crezca el sistema.</p>
+        <p className="pf-page-lead">Instalación, trabajo sin Internet y preferencias de este dispositivo.</p>
+        <p className="pf-page-lead-muted">Complete los dos primeros pasos antes de salir a cobrar sin señal.</p>
       </PageHero>
 
       <PwaInstallCard />

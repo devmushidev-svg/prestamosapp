@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import {
+  cacheLoanSnapshot,
   getLoanDetail,
   INSTALLMENTS_CACHE_KEY,
   listLoans,
@@ -204,6 +205,18 @@ async function saveProvisionalPayment(input: {
   return localPaymentId;
 }
 
+async function cacheConfirmedPayment(paymentId: string): Promise<void> {
+  const detail = await loadRemotePaymentDetail(paymentId);
+  await Promise.all([
+    cacheLoanSnapshot(detail.prestamo),
+    updateCache<PaymentSummary[]>(PAYMENTS_CACHE_KEY, (payments = []) => [{
+      ...detail.pago,
+      prestamo: detail.prestamo,
+    }, ...payments.filter((item) => item.id !== paymentId)]),
+    writeCache<PaymentDetail>(paymentDetailCacheKey(paymentId), detail),
+  ]);
+}
+
 export async function registerPayment(input: {
   solicitudId: string;
   prestamoId: string;
@@ -225,7 +238,15 @@ export async function registerPayment(input: {
     if (!isNetworkFailure(cause)) throw cause;
     error = { message: cause instanceof Error ? cause.message : "Sin conexión" };
   }
-  if (!error && typeof data === "string") return data;
+  if (!error && typeof data === "string") {
+    try {
+      await cacheConfirmedPayment(data);
+    } catch {
+      // El pago ya fue confirmado; la copia se completará en la siguiente sincronización.
+      console.warn("No se pudo actualizar la copia offline del pago confirmado.");
+    }
+    return data;
+  }
   if (error && isNetworkFailure(error)) return saveProvisionalPayment(input);
   if (error && isMissingRpc(error)) throw new Error("Falta aplicar la actualización de pagos en Supabase.");
   if (error) throw new Error(error.message);

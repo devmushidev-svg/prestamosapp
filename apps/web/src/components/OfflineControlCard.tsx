@@ -1,4 +1,4 @@
-import { CloudDownload, RefreshCw, TriangleAlert, Wifi, WifiOff } from "lucide-react";
+import { CheckCircle2, CloudDownload, RefreshCw, TriangleAlert, Wifi, WifiOff } from "lucide-react";
 import { useOffline } from "../offline/OfflineContext";
 import { Button, Card } from "./ui";
 
@@ -11,8 +11,10 @@ const OPERATION_LABELS = {
   "route.update": "Orden de ruta",
 } as const;
 
-function formatLastSync(value: string | null) {
-  if (!value) return "Todavía no se ha preparado una copia local.";
+function formatLastSync(value: string | null, prepared: boolean) {
+  if (!value) return prepared
+    ? "La copia local está disponible; todavía no tiene una fecha de sincronización."
+    : "Todavía no se ha preparado una copia local.";
   return `Última sincronización: ${new Intl.DateTimeFormat("es-HN", {
     dateStyle: "medium",
     timeStyle: "short",
@@ -29,6 +31,7 @@ export function OfflineControlCard() {
     attention,
     issues,
     lastSync,
+    storagePersistent,
     error,
     syncNow,
     retryIssue,
@@ -49,15 +52,15 @@ export function OfflineControlCard() {
             {online ? <Wifi className="h-5 w-5" strokeWidth={2} aria-hidden /> : <WifiOff className="h-5 w-5" strokeWidth={2} aria-hidden />}
           </span>
           <div>
-            <h2 className="font-extrabold text-pf-text">Trabajo sin Internet</h2>
+            <h2 className="font-extrabold text-pf-text">Datos para trabajar sin Internet</h2>
             <p className="mt-1 text-sm text-pf-text-tertiary">
               {online
                 ? "La aplicación puede descargar la cartera y enviar operaciones pendientes."
-                : lastSync
-                  ? "Puede consultar y cobrar con la copia guardada en este dispositivo."
+                : prepared
+                  ? "La copia de clientes, préstamos, cuotas y cobros está guardada en este dispositivo."
                   : "Todavía no hay una copia preparada. Conéctese una vez antes de salir a cobrar."}
             </p>
-            <p className="mt-2 text-xs font-medium text-pf-muted">{formatLastSync(lastSync)}</p>
+            <p className="mt-2 text-xs font-medium text-pf-muted">{formatLastSync(lastSync, prepared)}</p>
           </div>
         </div>
         <Button type="button" onClick={() => void syncNow()} disabled={!online || syncing || preparing}>
@@ -66,6 +69,14 @@ export function OfflineControlCard() {
         </Button>
       </div>
       <div className="mt-4 flex flex-wrap gap-2 text-xs font-bold">
+        <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 ${
+          prepared
+            ? "border-pf-success/25 bg-pf-success-soft text-pf-success"
+            : "border-pf-warning/25 bg-pf-warning-soft text-pf-warning"
+        }`}>
+          {prepared ? <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden /> : null}
+          {prepared ? "Copia de datos completa" : "Falta preparar la copia"}
+        </span>
         <span className="rounded-full border border-pf-border-soft bg-pf-surface-soft px-3 py-1.5 text-pf-text-secondary">
           {pending} pendiente{pending === 1 ? "" : "s"}
         </span>
@@ -77,6 +88,11 @@ export function OfflineControlCard() {
         ) : null}
       </div>
       {error ? <p className="mt-3 text-sm font-semibold text-pf-danger" role="alert">{error}</p> : null}
+      {prepared && storagePersistent === false ? (
+        <p className="mt-3 rounded-xl border border-pf-warning/25 bg-pf-warning-soft px-4 py-3 text-xs leading-relaxed text-pf-text-secondary">
+          El navegador no garantizó almacenamiento permanente. No borre los datos del sitio y abra la aplicación periódicamente con Internet para conservar la copia local.
+        </p>
+      ) : null}
       {issues.length > 0 ? (
         <div className="mt-4 space-y-2" aria-label="Operaciones que requieren revisión">
           {issues.map((issue) => (

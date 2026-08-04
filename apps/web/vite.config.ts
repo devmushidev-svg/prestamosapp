@@ -16,6 +16,9 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: "autoUpdate",
+      // El registro se hace desde la aplicación para poder mostrar si el
+      // navegador realmente dejó lista la copia del programa.
+      injectRegister: false,
       // Íconos (192/512/maskable/apple-touch) generados desde el SVG de marca.
       pwaAssets: { image: "public/favicon.svg" },
       manifest: {
@@ -26,11 +29,14 @@ export default defineConfig({
         theme_color: "#fff7ed",
         background_color: "#fff7ed",
         display: "standalone",
+        id: "/",
         start_url: "/",
         scope: "/",
       },
       workbox: {
         // SPA: rutas de cliente sirven index.html offline; los datos van directo a Supabase.
+        skipWaiting: true,
+        clientsClaim: true,
         navigateFallback: "/index.html",
       },
     }),

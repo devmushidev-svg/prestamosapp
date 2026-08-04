@@ -8,7 +8,7 @@ import {
   type OfflineOperation,
 } from "../lib/offlineDb";
 import { retryOfflineOperation, syncOfflineOperations } from "../lib/offlineSyncService";
-import { prepareOfflineWorkspace } from "../lib/offlineWorkspace";
+import { isOfflineWorkspacePrepared, prepareOfflineWorkspace } from "../lib/offlineWorkspace";
 import { supabase } from "../lib/supabase";
 
 type OfflineState = {
@@ -20,6 +20,7 @@ type OfflineState = {
   attention: number;
   issues: OfflineOperation[];
   lastSync: string | null;
+  storagePersistent: boolean | null;
   error: string;
   syncNow: () => Promise<void>;
   retryIssue: (id: string) => Promise<void>;
@@ -44,6 +45,8 @@ function savedLastSync(userId?: string) {
 
 export function OfflineProvider({ children }: { children: ReactNode }) {
   const { session, user } = useAuth();
+  const userId = user?.id ?? null;
+  const hasSession = Boolean(session);
   const [online, setOnline] = useState(() => navigator.onLine);
   const [syncing, setSyncing] = useState(false);
   const [preparing, setPreparing] = useState(false);
@@ -52,11 +55,12 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
   const [attention, setAttention] = useState(0);
   const [issues, setIssues] = useState<OfflineOperation[]>([]);
   const [lastSync, setLastSync] = useState<string | null>(null);
+  const [storagePersistent, setStoragePersistent] = useState<boolean | null>(null);
   const [error, setError] = useState("");
   const runningRef = useRef<Promise<void> | null>(null);
 
   const refreshCounts = useCallback(async () => {
-    if (!user) {
+    if (!userId) {
       setPending(0);
       setAttention(0);
       setIssues([]);
@@ -67,15 +71,15 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
     const nextIssues = operations.filter((item) => item.status === "attention");
     setAttention(nextIssues.length);
     setIssues(nextIssues);
-  }, [user]);
+  }, [userId]);
 
   const syncNow = useCallback(async () => {
-    if (!user || !navigator.onLine) {
+    if (!userId || !navigator.onLine) {
       setOnline(navigator.onLine);
       await refreshCounts().catch(() => undefined);
       return;
     }
-    if (!session) {
+    if (!hasSession) {
       setError("Estamos validando la sesión antes de enviar los cambios. Si continúa, vuelva a iniciar sesión con Internet.");
       return;
     }
@@ -92,6 +96,9 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
         }
         const result = await syncOfflineOperations();
         await prepareOfflineWorkspace();
+        if (!(await isOfflineWorkspacePrepared())) {
+          throw new Error("La copia local quedó incompleta. Vuelva a pulsar Preparar datos offline.");
+        }
         setPrepared(true);
         if (result.attention > 0) {
           setError(`${result.attention} operación requiere revisión antes de reemplazar la copia local.`);
@@ -100,16 +107,19 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
         } else {
           const timestamp = new Date().toISOString();
           try {
-            window.localStorage.setItem(lastSyncKey(user.id), timestamp);
+            window.localStorage.setItem(lastSyncKey(userId), timestamp);
           } catch {
             // La fecha visible no es crítica para la copia local.
           }
           setLastSync(timestamp);
         }
         try {
-          await navigator.storage?.persist?.();
+          const persisted = typeof navigator.storage?.persist === "function"
+            ? await navigator.storage.persist()
+            : null;
+          setStoragePersistent(persisted);
         } catch {
-          // El navegador decide si concede persistencia; la copia IndexedDB sigue disponible.
+          setStoragePersistent(false);
         }
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "No se pudo completar la sincronización.");
@@ -123,7 +133,7 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
       runningRef.current = null;
     });
     return runningRef.current;
-  }, [refreshCounts, session, user]);
+  }, [hasSession, refreshCounts, userId]);
 
   const retryIssue = useCallback(async (id: string) => {
     await retryOfflineOperation(id);
@@ -138,13 +148,36 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
   }, [refreshCounts, syncNow]);
 
   useEffect(() => {
-    setOfflineUserScope(user?.id ?? null);
-    const storedSync = savedLastSync(user?.id);
+    setOfflineUserScope(userId);
+    const storedSync = savedLastSync(userId ?? undefined);
     setLastSync(storedSync);
-    setPrepared(Boolean(storedSync));
-    void refreshCounts().catch(() => undefined);
-    if (user && navigator.onLine) void syncNow();
-  }, [refreshCounts, syncNow, user]);
+    setPrepared(false);
+    setStoragePersistent(null);
+    if (!userId) {
+      void refreshCounts().catch(() => undefined);
+      return;
+    }
+
+    let cancelled = false;
+    void Promise.all([
+      isOfflineWorkspacePrepared().catch(() => false),
+      typeof navigator.storage?.persisted === "function"
+        ? navigator.storage.persisted().catch(() => null)
+        : Promise.resolve(null),
+    ]).then(([workspacePrepared, persisted]) => {
+      if (cancelled) return;
+      setPrepared(workspacePrepared);
+      setStoragePersistent(persisted);
+      void refreshCounts().catch(() => undefined);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshCounts, userId]);
+
+  useEffect(() => {
+    if (userId && hasSession && navigator.onLine) void syncNow();
+  }, [hasSession, syncNow, userId]);
 
   useEffect(() => subscribeOfflineChanges(() => {
     void refreshCounts().catch(() => undefined);
@@ -183,12 +216,13 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
       attention,
       issues,
       lastSync,
+      storagePersistent,
       error,
       syncNow,
       retryIssue,
       discardIssue,
     }),
-    [online, syncing, preparing, prepared, pending, attention, issues, lastSync, error, syncNow, retryIssue, discardIssue],
+    [online, syncing, preparing, prepared, pending, attention, issues, lastSync, storagePersistent, error, syncNow, retryIssue, discardIssue],
   );
   return <OfflineContext.Provider value={value}>{children}</OfflineContext.Provider>;
 }

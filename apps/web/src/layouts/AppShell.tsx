@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Banknote, BarChart3, Building2, CalendarClock, ChevronDown, FileClock, FilePlus2, HandCoins, Home, LogOut, Menu, Palette, Route, Settings, Settings2, User, Users, Wallet, X } from "lucide-react";
+import { Banknote, BarChart3, Building2, CalendarClock, ChevronDown, FileClock, FilePlus2, HandCoins, Home, LogOut, Menu, MonitorSmartphone, Route, Settings, Settings2, User, Users, Wallet, X } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { useBusinessConfig } from "../business/BusinessConfigContext";
@@ -64,7 +64,7 @@ const RIBBON: Record<TabId, RibbonGroupDef[]> = {
   ajustes: [
     {
       title: "Preferencias",
-      items: [{ to: "/ajustes", label: "Apariencia y temas", icon: Palette, end: true }],
+      items: [{ to: "/ajustes", label: "Instalar y modo offline", icon: MonitorSmartphone, end: true }],
     },
   ],
 };
