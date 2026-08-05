@@ -1,8 +1,10 @@
 import { supabase } from "./supabase";
+import { offlineAwareFetch } from "./networkRequest";
 import type { Cliente, EstadoCliente } from "../types";
 import {
   deleteCache,
   getOfflineUserScope,
+  isOfflineCachePreferred,
   isNetworkFailure,
   queueOfflineOperation,
   readCache,
@@ -74,7 +76,7 @@ async function createFacadePhotoSignedUrl(path: string): Promise<string> {
 
 async function downloadFacadePhoto(path: string): Promise<Blob> {
   const signedUrl = await createFacadePhotoSignedUrl(path);
-  const response = await fetch(signedUrl);
+  const response = await offlineAwareFetch(signedUrl);
   if (!response.ok) throw new Error(`No se pudo descargar la foto de fachada (${response.status}).`);
   return response.blob();
 }
@@ -83,7 +85,7 @@ export async function getFacadePhotoUrl(path: string | null): Promise<string | n
   if (!path) return null;
   const cached = await readCache<Blob>(facadePhotoCacheKey(path)).catch(() => undefined);
   if (cached instanceof Blob) return localFacadePhotoUrl(path, cached);
-  if (!navigator.onLine) return null;
+  if (!navigator.onLine || isOfflineCachePreferred()) return null;
 
   let signedUrl: string;
   try {
@@ -92,7 +94,7 @@ export async function getFacadePhotoUrl(path: string | null): Promise<string | n
     return null;
   }
   try {
-    const response = await fetch(signedUrl);
+    const response = await offlineAwareFetch(signedUrl);
     if (!response.ok) return signedUrl;
     const blob = await response.blob();
     await writeCache(facadePhotoCacheKey(path), blob);

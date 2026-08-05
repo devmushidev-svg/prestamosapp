@@ -41,6 +41,7 @@ function hasServiceWorkerControl() {
 
 let initialized = false;
 let installPrompt: BeforeInstallPromptEvent | null = null;
+let applyServiceWorkerUpdate: (() => Promise<void>) | null = null;
 let state: InstallState | null = null;
 const listeners = new Set<(next: InstallState) => void>();
 
@@ -101,12 +102,12 @@ export function initializePwaInstallCapture() {
   };
   navigator.serviceWorker.addEventListener("controllerchange", publishControlState);
 
-  registerSW({
+  applyServiceWorkerUpdate = registerSW({
     immediate: true,
     onRegisteredSW: publishControlState,
     // Una actualización no debe recargar un formulario de préstamo o pago sin
     // permiso. Queda lista y se aplica cuando el usuario lo decide o reabre la app.
-    onNeedReload: () => publish({ updateAvailable: true }),
+    onNeedRefresh: () => publish({ updateAvailable: true }),
     onOfflineReady: publishControlState,
     onRegisterError: (cause) => {
       const detail = cause instanceof Error ? cause.message : String(cause ?? "");
@@ -195,7 +196,14 @@ export function usePwaInstall() {
   }, []);
 
   const install = useCallback(() => requestInstallation(), []);
-  const applyUpdate = useCallback(() => window.location.reload(), []);
+  const applyUpdate = useCallback(async () => {
+    if (!applyServiceWorkerUpdate) {
+      window.location.reload();
+      return;
+    }
+    publish({ updateAvailable: false });
+    await applyServiceWorkerUpdate();
+  }, []);
   return {
     ...snapshot,
     applyUpdate,

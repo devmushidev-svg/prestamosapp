@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { countOfflineOperations, isNetworkFailure, setOfflineUserScope, setPreferOfflineCache } from "../lib/offlineDb";
+import { withTimeout } from "../lib/networkRequest";
 import { supabase } from "../lib/supabase";
 
 export type UserInfo = {
@@ -138,8 +139,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // segundo plano y una respuesta online definitiva puede cerrar este acceso.
     if (useOfflineIdentity()) setLoading(false);
 
-    supabase.auth
-      .getSession()
+    withTimeout(supabase.auth.getSession(), 4_000)
       .then(({ data, error }) => {
         if (disposed) return;
         if (data.session) {
@@ -182,13 +182,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       else clearIdentity();
     });
     const handleOnline = () => {
-      void supabase.auth.getSession()
+      void withTimeout(supabase.auth.getSession(), 4_000)
         .then(({ data, error }) => {
+          if (disposed) return;
           if (data.session) useSession(data.session);
           else if (error && isNetworkFailure(error)) useOfflineIdentity();
           else clearIdentity();
         })
-        .catch(() => useOfflineIdentity());
+        .catch(() => {
+          if (!disposed) useOfflineIdentity();
+        });
     };
     window.addEventListener("online", handleOnline);
     return () => {

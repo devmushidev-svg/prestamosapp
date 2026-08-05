@@ -15,7 +15,9 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: "autoUpdate",
+      // Mantiene la versión anterior hasta que el usuario acepte actualizar.
+      // Así una página abierta no mezcla chunks lazy de dos compilaciones.
+      registerType: "prompt",
       // El registro se hace desde la aplicación para poder mostrar si el
       // navegador realmente dejó lista la copia del programa.
       injectRegister: false,
@@ -35,7 +37,6 @@ export default defineConfig({
       },
       workbox: {
         // SPA: rutas de cliente sirven index.html offline; los datos van directo a Supabase.
-        skipWaiting: true,
         clientsClaim: true,
         navigateFallback: "/index.html",
       },

@@ -11,6 +11,7 @@ import {
 } from "../lib/offlineDb";
 import { retryOfflineOperation, syncOfflineOperations } from "../lib/offlineSyncService";
 import { isOfflineWorkspacePrepared, prepareOfflineWorkspace } from "../lib/offlineWorkspace";
+import { withOnlineDeadline } from "../lib/networkRequest";
 import { supabase } from "../lib/supabase";
 
 type OfflineState = {
@@ -95,12 +96,18 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
       setPreparing(true);
       setError("");
       try {
-        const authResult = await supabase.auth.refreshSession();
+        const authResult = await withOnlineDeadline(supabase.auth.refreshSession());
         if (authResult.error || !authResult.data.session) {
-          if (!authResult.error || isNetworkFailure(authResult.error)) setPreferOfflineCache(true);
+          if (authResult.error && isNetworkFailure(authResult.error)) {
+            setOnline(false);
+            setPreferOfflineCache(true);
+          } else if (!authResult.error) {
+            setPreferOfflineCache(true);
+          }
           setError("La sesión necesita validarse otra vez. Inicie sesión con Internet; los cambios seguirán guardados.");
           return;
         }
+        setOnline(true);
         setPreferOfflineCache(false);
         const result = await syncOfflineOperations();
         if (result.attention > 0 || result.pending > 0) {
@@ -126,7 +133,10 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
         }
         setLastSync(timestamp);
       } catch (cause) {
-        if (isNetworkFailure(cause)) setPreferOfflineCache(true);
+        if (isNetworkFailure(cause)) {
+          setOnline(false);
+          setPreferOfflineCache(true);
+        }
         setError(cause instanceof Error ? cause.message : "No se pudo completar la sincronización.");
       } finally {
         await refreshCounts().catch(() => undefined);

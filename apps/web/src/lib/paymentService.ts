@@ -12,11 +12,13 @@ import {
 import { moneyToCents, previewPayment, withInstallmentBalances, type CuotaConSaldo } from "./paymentAllocator";
 import type { Cuota, Pago, PagoAplicacion } from "../types";
 import {
+  isOfflineCachePreferred,
   isNetworkFailure,
   queueOfflineOperation,
   readCache,
   readThroughCache,
   resolveOfflineAlias,
+  setPreferOfflineCache,
   updateCache,
   writeCache,
 } from "./offlineDb";
@@ -74,13 +76,17 @@ function isMissingPaymentMigration(error: { code?: string }) {
 }
 
 export async function refreshPortfolioStatuses(): Promise<void> {
-  if (!navigator.onLine) return;
+  if (!navigator.onLine || isOfflineCachePreferred()) return;
   try {
     const { error } = await supabase.rpc("actualizar_estados_cartera");
-    if (error && isNetworkFailure(error)) return;
+    if (error && isNetworkFailure(error)) {
+      setPreferOfflineCache(true);
+      return;
+    }
     if (error && !isMissingRpc(error)) throw error;
   } catch (cause) {
     if (!isNetworkFailure(cause)) throw cause;
+    setPreferOfflineCache(true);
   }
 }
 

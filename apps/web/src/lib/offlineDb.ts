@@ -291,6 +291,11 @@ export function setPreferOfflineCache(prefer: boolean): void {
   preferOfflineCache = prefer;
 }
 
+/** Permite omitir tareas remotas auxiliares cuando ya falló la conectividad. */
+export function isOfflineCachePreferred(): boolean {
+  return preferOfflineCache;
+}
+
 function normalizeRevision(value: unknown): number {
   const numericValue = Number(value ?? 0);
   return Number.isSafeInteger(numericValue) && numericValue >= 0 ? numericValue : 0;
@@ -441,18 +446,25 @@ export function isNetworkFailure(error: unknown): boolean {
   if (error instanceof OfflineCacheMissError) return true;
   const name = String(errorProperty(error, "name") ?? "").toLowerCase();
   const code = String(errorProperty(error, "code") ?? "").toUpperCase();
-  const status = errorProperty(error, "status");
+  const rawStatus = errorProperty(error, "status");
+  const status = typeof rawStatus === "number"
+    ? rawStatus
+    : typeof rawStatus === "string" && rawStatus.trim() !== ""
+      ? Number(rawStatus)
+      : Number.NaN;
   const message = String(
     error instanceof Error ? error.message : errorProperty(error, "message") ?? error ?? "",
   ).toLowerCase();
 
-  if (typeof status === "number" && status >= 400) return false;
-  if (/^(?:PGRST|23|42|P0|XX)[A-Z0-9]*$/.test(code)) return false;
-  if (["networkerror", "fetcherror", "authretryablefetcherror"].includes(name)) return true;
+  if (["aborterror", "timeouterror", "networkerror", "fetcherror", "authretryablefetcherror"].includes(name)) return true;
+  if (code === "ABORT_ERR" || code === "TIMEOUT_ERR" || code === "PGRST002") return true;
   if (status === 0) return true;
+  if ([502, 503, 504, 520].includes(status)) return true;
   if (/^(ECONN|ENET|EHOST|ETIMEDOUT|NETWORK_)/.test(code)) return true;
+  if (Number.isFinite(status) && status >= 400) return false;
+  if (/^(?:PGRST|23|42|P0|XX)[A-Z0-9]*$/.test(code)) return false;
   if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
-  return /failed to fetch|networkerror|network request failed|load failed|connection (?:failed|refused|reset)|internet disconnected|\boffline\b|err_(?:internet|network|connection)/i.test(message);
+  return /aborterror|timeouterror|failed to fetch|networkerror|network request failed|load failed|timed out|tardó demasiado|connection (?:failed|refused|reset)|internet disconnected|\boffline\b|err_(?:internet|network|connection)/i.test(message);
 }
 
 function operationAffectsCache(operation: OfflineOperation, key: string): boolean {
@@ -530,6 +542,7 @@ export async function readThroughCache<T>(key: string, loader: () => Promise<T>)
     return fresh;
   } catch (error) {
     if (!isNetworkFailure(error)) throw error;
+    preferOfflineCache = true;
     const cached = await readCache<T>(key);
     if (cached !== undefined) return cached;
     throw error;
