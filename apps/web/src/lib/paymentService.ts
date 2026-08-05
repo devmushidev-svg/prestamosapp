@@ -3,6 +3,7 @@ import {
   cacheLoanSnapshot,
   getLoanDetail,
   INSTALLMENTS_CACHE_KEY,
+  listAllInstallments,
   listLoans,
   LOANS_CACHE_KEY,
   type PrestamoConCliente,
@@ -42,6 +43,7 @@ export type PaymentDetail = {
 type RawPayment = Partial<Pago> & Pick<Pago, "id" | "prestamo_id" | "fecha" | "monto">;
 
 export const PAYMENTS_CACHE_KEY = "payments";
+export const PAYMENT_APPLICATIONS_CACHE_KEY = "payment-applications";
 const paymentDetailCacheKey = (id: string) => `payment-detail:${id}`;
 const loanDetailCacheKey = (id: string) => `loan-detail:${id}`;
 
@@ -200,6 +202,10 @@ async function saveProvisionalPayment(input: {
       ...pago,
       prestamo: updatedLoan,
     }, ...payments.filter((item) => item.id !== localPaymentId)]),
+    updateCache<PaymentApplicationDetail[]>(PAYMENT_APPLICATIONS_CACHE_KEY, (items = []) => [
+      ...items.filter((item) => item.pago_id !== localPaymentId),
+      ...aplicaciones,
+    ]),
     writeCache<PaymentDetail>(paymentDetailCacheKey(localPaymentId), { pago, prestamo: updatedLoan, aplicaciones }),
   ]);
   return localPaymentId;
@@ -213,6 +219,10 @@ async function cacheConfirmedPayment(paymentId: string): Promise<void> {
       ...detail.pago,
       prestamo: detail.prestamo,
     }, ...payments.filter((item) => item.id !== paymentId)]),
+    updateCache<PaymentApplicationDetail[]>(PAYMENT_APPLICATIONS_CACHE_KEY, (items = []) => [
+      ...items.filter((item) => item.pago_id !== paymentId),
+      ...detail.aplicaciones,
+    ]),
     writeCache<PaymentDetail>(paymentDetailCacheKey(paymentId), detail),
   ]);
 }
@@ -253,10 +263,9 @@ export async function registerPayment(input: {
   throw new Error("Supabase devolvió una respuesta inesperada. No se reintentó para evitar duplicados.");
 }
 
-export async function listPayments(prestamoId?: string): Promise<PaymentSummary[]> {
-  const payments = await readThroughCache(PAYMENTS_CACHE_KEY, async () => {
+export async function downloadPayments(loanSnapshot?: PrestamoConCliente[]): Promise<PaymentSummary[]> {
     const paymentRows: RawPayment[] = [];
-    const loansPromise = listLoans();
+    const loansPromise = loanSnapshot ? Promise.resolve(loanSnapshot) : listLoans();
     const pageSize = 500;
     for (let from = 0; ; from += pageSize) {
       const paymentResult = await supabase
@@ -270,13 +279,16 @@ export async function listPayments(prestamoId?: string): Promise<PaymentSummary[
       paymentRows.push(...batch);
       if (batch.length < pageSize) break;
     }
-    const loans = await loansPromise;
-    const loanMap = new Map(loans.map((loan) => [loan.id, loan]));
+    const resolvedLoans = await loansPromise;
+    const loanMap = new Map(resolvedLoans.map((loan) => [loan.id, loan]));
     return paymentRows.map((row) => {
       const pago = normalizePayment(row);
       return { ...pago, prestamo: loanMap.get(pago.prestamo_id) ?? null };
     });
-  });
+}
+
+export async function listPayments(prestamoId?: string): Promise<PaymentSummary[]> {
+  const payments = await readThroughCache(PAYMENTS_CACHE_KEY, () => downloadPayments());
   return prestamoId ? payments.filter((payment) => payment.prestamo_id === prestamoId) : payments;
 }
 
@@ -286,6 +298,70 @@ type RawApplication = PagoAplicacion & {
     | Array<Pick<Cuota, "id" | "numero" | "fecha_vencimiento" | "monto" | "monto_pagado" | "estado">>
     | null;
 };
+
+function normalizeApplication(row: RawApplication): PaymentApplicationDetail {
+  const related = Array.isArray(row.cuotas) ? row.cuotas[0] ?? null : row.cuotas;
+  return {
+    id: row.id,
+    pago_id: row.pago_id,
+    prestamo_id: row.prestamo_id,
+    cuota_id: row.cuota_id,
+    monto: Number(row.monto),
+    creado_en: row.creado_en,
+    cuota: related
+      ? {
+          ...related,
+          numero: Number(related.numero),
+          monto: Number(related.monto),
+          monto_pagado: Number(related.monto_pagado),
+        }
+      : null,
+  };
+}
+
+export async function downloadPaymentApplications(installmentSnapshot?: Cuota[]): Promise<PaymentApplicationDetail[]> {
+  const pageSize = 500;
+  const rows: PaymentApplicationDetail[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const result = await supabase
+      .from("pago_aplicaciones")
+      .select("*,cuotas(id,numero,fecha_vencimiento,monto,monto_pagado,estado)")
+      .order("creado_en")
+      .order("id")
+      .range(from, from + pageSize - 1);
+    if (result.error && isMissingPaymentMigration(result.error)) break;
+    if (result.error) throw result.error;
+    const batch = ((result.data ?? []) as RawApplication[]).map(normalizeApplication);
+    rows.push(...batch);
+    if (batch.length < pageSize) return rows;
+  }
+
+  // Compatibilidad mientras PostgREST actualiza la relación o con un esquema
+  // anterior: conserva el reparto y lo enriquece desde la copia de cuotas.
+  const installments = installmentSnapshot ?? await listAllInstallments();
+  const installmentMap = new Map(installments.map((item) => [item.id, item]));
+  const fallbackRows: PaymentApplicationDetail[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const result = await supabase
+      .from("pago_aplicaciones")
+      .select("*")
+      .order("creado_en")
+      .order("id")
+      .range(from, from + pageSize - 1);
+    if (result.error && isMissingPaymentMigration(result.error)) return [];
+    if (result.error) throw result.error;
+    const batch = ((result.data ?? []) as PagoAplicacion[]).map((row) => normalizeApplication({
+      ...row,
+      cuotas: installmentMap.get(row.cuota_id) ?? null,
+    }));
+    fallbackRows.push(...batch);
+    if (batch.length < pageSize) return fallbackRows;
+  }
+}
+
+export async function listPaymentApplications(): Promise<PaymentApplicationDetail[]> {
+  return readThroughCache(PAYMENT_APPLICATIONS_CACHE_KEY, downloadPaymentApplications);
+}
 
 async function loadRemotePaymentDetail(id: string): Promise<PaymentDetail> {
   const paymentResult = await supabase.from("pagos").select("*").eq("id", id).single();
@@ -317,25 +393,7 @@ async function loadRemotePaymentDetail(id: string): Promise<PaymentDetail> {
       : [];
     return { pago, prestamo, aplicaciones };
   }
-  const aplicaciones = ((applicationResult.data ?? []) as RawApplication[]).map((row) => {
-    const related = Array.isArray(row.cuotas) ? row.cuotas[0] ?? null : row.cuotas;
-    return {
-      id: row.id,
-      pago_id: row.pago_id,
-      prestamo_id: row.prestamo_id,
-      cuota_id: row.cuota_id,
-      monto: Number(row.monto),
-      creado_en: row.creado_en,
-      cuota: related
-        ? {
-            ...related,
-            numero: Number(related.numero),
-            monto: Number(related.monto),
-            monto_pagado: Number(related.monto_pagado),
-          }
-        : null,
-    };
-  });
+  const aplicaciones = ((applicationResult.data ?? []) as RawApplication[]).map(normalizeApplication);
   return { pago, prestamo, aplicaciones };
 }
 
@@ -349,27 +407,35 @@ export async function getPaymentDetail(id: string): Promise<PaymentDetail> {
     return await readThroughCache(paymentDetailCacheKey(resolvedId), () => loadRemotePaymentDetail(resolvedId));
   } catch (cause) {
     if (!isNetworkFailure(cause) && navigator.onLine) throw cause;
-    const payments = await readCache<PaymentSummary[]>(PAYMENTS_CACHE_KEY);
+    const [payments, cachedApplications] = await Promise.all([
+      readCache<PaymentSummary[]>(PAYMENTS_CACHE_KEY),
+      readCache<PaymentApplicationDetail[]>(PAYMENT_APPLICATIONS_CACHE_KEY),
+    ]);
     const summary = payments?.find((item) => item.id === resolvedId || item.id === id);
     if (!summary) throw cause;
     const prestamo = await getLoanDetail(summary.prestamo_id);
+    const storedApplications = cachedApplications?.filter((application) =>
+      application.pago_id === resolvedId || application.pago_id === id
+    ) ?? [];
     const snapshotApplications = summary.datos_recibo?.aplicaciones ?? [];
-    const aplicaciones: PaymentApplicationDetail[] = snapshotApplications.map((application, index) => ({
-      id: `snapshot-${summary.id}-${index}`,
-      pago_id: summary.id,
-      prestamo_id: summary.prestamo_id,
-      cuota_id: summary.cuota_id ?? `snapshot-${index}`,
-      monto: Number(application.monto),
-      creado_en: summary.fecha,
-      cuota: {
-        id: summary.cuota_id ?? `snapshot-${index}`,
-        numero: Number(application.numeroCuota),
-        fecha_vencimiento: "",
-        monto: Number(application.monto),
-        monto_pagado: Number(application.monto),
-        estado: "pagada",
-      },
-    }));
+    const aplicaciones: PaymentApplicationDetail[] = storedApplications.length > 0
+      ? storedApplications
+      : snapshotApplications.map((application, index) => ({
+          id: `snapshot-${summary.id}-${index}`,
+          pago_id: summary.id,
+          prestamo_id: summary.prestamo_id,
+          cuota_id: summary.cuota_id ?? `snapshot-${index}`,
+          monto: Number(application.monto),
+          creado_en: summary.fecha,
+          cuota: {
+            id: summary.cuota_id ?? `snapshot-${index}`,
+            numero: Number(application.numeroCuota),
+            fecha_vencimiento: "",
+            monto: Number(application.monto),
+            monto_pagado: Number(application.monto),
+            estado: "pagada",
+          },
+        }));
     const detail = { pago: summary, prestamo, aplicaciones } satisfies PaymentDetail;
     await writeCache(paymentDetailCacheKey(resolvedId), detail);
     return detail;

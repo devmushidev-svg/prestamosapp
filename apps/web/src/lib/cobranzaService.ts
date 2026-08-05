@@ -84,8 +84,7 @@ type PromesaGestionRow = Pick<
 export const GESTIONES_CACHE_KEY = "gestiones";
 type GestionesSnapshot = { rows: Gestion[]; migracionPendiente: boolean };
 
-export async function listAllGestiones(): Promise<GestionesSnapshot> {
-  return readThroughCache(GESTIONES_CACHE_KEY, async () => {
+export async function downloadAllGestiones(): Promise<GestionesSnapshot> {
     const pageSize = 500;
     const rows: Gestion[] = [];
     for (let from = 0; ; from += pageSize) {
@@ -103,7 +102,10 @@ export async function listAllGestiones(): Promise<GestionesSnapshot> {
       rows.push(...batch);
       if (batch.length < pageSize) return { rows, migracionPendiente: false };
     }
-  });
+}
+
+export async function listAllGestiones(): Promise<GestionesSnapshot> {
+  return readThroughCache(GESTIONES_CACHE_KEY, downloadAllGestiones);
 }
 
 /** Días entre una fecha civil YYYY-MM-DD y hoy (Honduras); ambas se parsean como UTC puro. */

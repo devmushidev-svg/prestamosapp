@@ -6,6 +6,8 @@ const BROADCAST_CHANNEL_NAME = "multiprestamos-offline-changes";
 const CACHE_STORE = "cache";
 const OUTBOX_STORE = "outbox";
 const ALIAS_STORE = "aliases";
+const CACHE_REVISION_KEY = "__cache-revision";
+const OFFLINE_CACHE_NETWORK_GRACE_MS = 1500;
 
 export type OfflineOperationType =
   | "business.upsert"
@@ -71,6 +73,11 @@ type CacheRecord = {
   updatedAt: string;
 };
 
+export type OfflineCacheEntry = {
+  key: string;
+  value: unknown;
+};
+
 type AliasRecord = {
   scope: string;
   localId: string;
@@ -97,6 +104,7 @@ export const offlineDbEvents = new EventTarget();
 let currentUserScope: string | null | undefined;
 let databasePromise: Promise<IDBDatabase> | null = null;
 let broadcastChannel: BroadcastChannel | null | undefined;
+let preferOfflineCache = false;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -264,13 +272,122 @@ export async function readCache<T>(key: string): Promise<T | undefined> {
   return record?.value as T | undefined;
 }
 
-export async function writeCache<T>(key: string, value: T): Promise<void> {
+export class OfflineCacheMissError extends Error {
+  constructor() {
+    super("Esta información todavía no fue preparada para trabajar sin Internet.");
+    this.name = "OfflineCacheMissError";
+  }
+}
+
+export class OfflineCacheChangedError extends Error {
+  constructor() {
+    super("Los datos locales cambiaron durante la preparación. La copia anterior se conservó.");
+    this.name = "OfflineCacheChangedError";
+  }
+}
+
+/** Permite abrir IndexedDB cuando hay Wi-Fi pero la sesión remota no responde. */
+export function setPreferOfflineCache(prefer: boolean): void {
+  preferOfflineCache = prefer;
+}
+
+function normalizeRevision(value: unknown): number {
+  const numericValue = Number(value ?? 0);
+  return Number.isSafeInteger(numericValue) && numericValue >= 0 ? numericValue : 0;
+}
+
+function revisionValue(record: CacheRecord | undefined): number {
+  const value = normalizeRevision(record?.value);
+  return value;
+}
+
+function bumpCacheRevision(store: IDBObjectStore, scope: string): void {
+  const request = store.get([scope, CACHE_REVISION_KEY]) as IDBRequest<CacheRecord | undefined>;
+  request.addEventListener("success", () => {
+    store.put({
+      scope,
+      key: CACHE_REVISION_KEY,
+      value: revisionValue(request.result) + 1,
+      updatedAt: nowIso(),
+    } satisfies CacheRecord);
+  }, { once: true });
+}
+
+export async function getOfflineCacheRevision(): Promise<number> {
+  return normalizeRevision(await readCache<number>(CACHE_REVISION_KEY).catch(() => 0));
+}
+
+export async function writeCache<T>(key: string, value: T, expectedScope?: string): Promise<void> {
   const scope = requireUserScope();
+  if (expectedScope && scope !== expectedScope) throw new OfflineUserScopeError();
   const database = await openDatabase();
+  if (expectedScope && getOfflineUserScope() !== expectedScope) throw new OfflineUserScopeError();
   const transaction = database.transaction(CACHE_STORE, "readwrite");
-  transaction.objectStore(CACHE_STORE).put({ scope, key, value, updatedAt: nowIso() } satisfies CacheRecord);
+  const store = transaction.objectStore(CACHE_STORE);
+  store.put({ scope, key, value, updatedAt: nowIso() } satisfies CacheRecord);
+  bumpCacheRevision(store, scope);
   await transactionComplete(transaction);
   emitChange({ scope, area: "cache", action: "set", key });
+}
+
+/**
+ * Publica varias partes de una copia offline en una sola transacción. Así el
+ * manifiesto nunca queda confirmado si una de las colecciones no pudo
+ * escribirse (por ejemplo, por falta de espacio en el dispositivo).
+ */
+export async function writeCacheBatch(
+  entries: readonly OfflineCacheEntry[],
+  expectedScope?: string,
+  options: { expectedRevision?: number; requireEmptyOutbox?: boolean } = {},
+): Promise<void> {
+  const scope = requireUserScope();
+  if (expectedScope && scope !== expectedScope) {
+    throw new OfflineUserScopeError();
+  }
+  const uniqueEntries = Array.from(
+    new Map(entries.map((entry) => [entry.key, entry] as const)).values(),
+  );
+  if (uniqueEntries.length === 0) return;
+
+  const database = await openDatabase();
+  if (expectedScope && getOfflineUserScope() !== expectedScope) {
+    throw new OfflineUserScopeError();
+  }
+  const storeNames = options.requireEmptyOutbox ? [CACHE_STORE, OUTBOX_STORE] : [CACHE_STORE];
+  const transaction = database.transaction(storeNames, "readwrite");
+  const store = transaction.objectStore(CACHE_STORE);
+  const completed = transactionComplete(transaction);
+  const revisionRequest = store.get([scope, CACHE_REVISION_KEY]) as IDBRequest<CacheRecord | undefined>;
+  const outboxRequest = options.requireEmptyOutbox
+    ? transaction.objectStore(OUTBOX_STORE).index("scope").getAll(scope) as IDBRequest<OfflineOperation[]>
+    : null;
+  const [revisionRecord, outbox] = await Promise.all([
+    requestResult(revisionRequest),
+    outboxRequest ? requestResult(outboxRequest) : Promise.resolve([]),
+  ]);
+  const currentRevision = revisionValue(revisionRecord);
+  if (options.expectedRevision !== undefined && currentRevision !== options.expectedRevision) {
+    transaction.abort();
+    await completed.catch(() => undefined);
+    throw new OfflineCacheChangedError();
+  }
+  if (outbox.length > 0) {
+    transaction.abort();
+    await completed.catch(() => undefined);
+    throw new Error("Hay cambios pendientes en este dispositivo. La copia local se conservó.");
+  }
+  const updatedAt = nowIso();
+  uniqueEntries.forEach(({ key, value }) => {
+    store.put({ scope, key, value, updatedAt } satisfies CacheRecord);
+  });
+  store.put({
+    scope,
+    key: CACHE_REVISION_KEY,
+    value: currentRevision + 1,
+    updatedAt,
+  } satisfies CacheRecord);
+  await completed;
+  uniqueEntries.forEach(({ key }) => emitChange({ scope, area: "cache", action: "set", key }));
 }
 
 export async function updateCache<T>(
@@ -281,6 +398,7 @@ export async function updateCache<T>(
   const database = await openDatabase();
   const transaction = database.transaction(CACHE_STORE, "readwrite");
   const store = transaction.objectStore(CACHE_STORE);
+  bumpCacheRevision(store, scope);
   const completed = transactionComplete(transaction);
   const mutation = new Promise<T | undefined>((resolve, reject) => {
     const request = store.get([scope, key]) as IDBRequest<CacheRecord | undefined>;
@@ -306,7 +424,9 @@ export async function deleteCache(key: string): Promise<void> {
   const scope = requireUserScope();
   const database = await openDatabase();
   const transaction = database.transaction(CACHE_STORE, "readwrite");
-  transaction.objectStore(CACHE_STORE).delete([scope, key]);
+  const store = transaction.objectStore(CACHE_STORE);
+  store.delete([scope, key]);
+  bumpCacheRevision(store, scope);
   await transactionComplete(transaction);
   emitChange({ scope, area: "cache", action: "delete", key });
 }
@@ -318,6 +438,7 @@ function errorProperty(error: unknown, property: string): unknown {
 }
 
 export function isNetworkFailure(error: unknown): boolean {
+  if (error instanceof OfflineCacheMissError) return true;
   const name = String(errorProperty(error, "name") ?? "").toLowerCase();
   const code = String(errorProperty(error, "code") ?? "").toUpperCase();
   const status = errorProperty(error, "status");
@@ -340,7 +461,7 @@ function operationAffectsCache(operation: OfflineOperation, key: string): boolea
   if (key === "loans" || key === "installments") {
     return operation.type === "loan.create" || operation.type === "payment.create";
   }
-  if (key === "payments") return operation.type === "payment.create";
+  if (key === "payments" || key === "payment-applications") return operation.type === "payment.create";
   if (key === "gestiones") return operation.type === "gestion.create";
   if (key.startsWith("loan-detail:")) {
     const loanId = key.slice("loan-detail:".length);
@@ -358,19 +479,54 @@ function operationAffectsCache(operation: OfflineOperation, key: string): boolea
 }
 
 export async function readThroughCache<T>(key: string, loader: () => Promise<T>): Promise<T> {
-  const preserveOptimisticCopy = getOfflineUserScope()
+  const requestScope = getOfflineUserScope();
+  const preserveOptimisticCopy = requestScope
     ? await listOfflineOperations().then((operations) => operations.some((item) => operationAffectsCache(item, key))).catch(() => false)
     : false;
-  if ((typeof navigator !== "undefined" && navigator.onLine === false) || preserveOptimisticCopy) {
+  const browserIsOffline = typeof navigator !== "undefined" && navigator.onLine === false;
+  if (browserIsOffline || preserveOptimisticCopy) {
     const cached = await readCache<T>(key);
     if (cached !== undefined) return cached;
-    if (typeof navigator !== "undefined" && navigator.onLine === false) {
-      throw new Error("Esta información todavía no fue preparada para trabajar sin Internet.");
+    if (browserIsOffline) throw new OfflineCacheMissError();
+  }
+  if (preferOfflineCache) {
+    const cached = await readCache<T>(key);
+    if (cached === undefined) throw new OfflineCacheMissError();
+    const preferredScope = getOfflineUserScope();
+    if (!preferredScope) throw new OfflineUserScopeError();
+    const preferredRevision = await getOfflineCacheRevision();
+
+    // Con una sesión aún no confirmada damos una ventana corta al servidor.
+    // Si responde, la vista nace fresca; si no, abre la copia sin esperar los
+    // timeouts largos. Una respuesta tardía se descarta para no pisar cambios.
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let fallbackWon = false;
+    const fresh = loader().then(async (value) => {
+      if (fallbackWon) return cached;
+      await writeCacheBatch(
+        [{ key, value }],
+        preferredScope,
+        { expectedRevision: preferredRevision, requireEmptyOutbox: true },
+      );
+      return value;
+    });
+    const fallback = new Promise<T>((resolve) => {
+      timeoutId = setTimeout(() => {
+        fallbackWon = true;
+        resolve(cached);
+      }, OFFLINE_CACHE_NETWORK_GRACE_MS);
+    });
+    try {
+      return await Promise.race([fresh, fallback]);
+    } catch {
+      return cached;
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
   }
   try {
     const fresh = await loader();
-    await writeCache(key, fresh);
+    if (requestScope) await writeCache(key, fresh, requestScope);
     return fresh;
   } catch (error) {
     if (!isNetworkFailure(error)) throw error;
@@ -419,7 +575,14 @@ export async function queueOfflineOperation<TPayload>(
     updatedAt: timestamp,
   };
 
-  const transaction = database.transaction(OUTBOX_STORE, "readwrite");
+  let transaction: IDBTransaction;
+  try {
+    // Los movimientos de dinero deben llegar al disco antes de mostrarse como
+    // guardados. Navegadores antiguos ignoran esta opción mediante el fallback.
+    transaction = database.transaction(OUTBOX_STORE, "readwrite", { durability: "strict" });
+  } catch {
+    transaction = database.transaction(OUTBOX_STORE, "readwrite");
+  }
   const store = transaction.objectStore(OUTBOX_STORE);
   const completed = transactionComplete(transaction);
   const mutation = new Promise<OfflineOperation<TPayload> | undefined>((resolve, reject) => {

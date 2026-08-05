@@ -6,6 +6,7 @@ import { PageHero } from "../components/PageHero";
 import { Button, Card, EmptyState, Field, Input, Modal } from "../components/ui";
 import { cobrarCliente, getClienteRuta, registrarGestion, repartirCobro, type ClienteRuta } from "../lib/cobranzaService";
 import { formatLoanNumber, formatMoney } from "../lib/format";
+import { saveReceiptBatch } from "../lib/receiptBatchService";
 
 const NUMBER_INPUT_CLASS =
   "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none";
@@ -104,6 +105,18 @@ export function CobranzaAbonoPage() {
       // Bitácora de la visita. Si falla no se bloquea el cobro: "visitado hoy"
       // también se deduce de los pagos del día.
       await registrarGestion({ clienteId, resultado: "pago", pagoId: pagoIds[0] }).catch(() => {});
+      let batchStorageWarning = false;
+      try {
+        await saveReceiptBatch({
+          pagoIds,
+          totalCobrado: monto,
+          clienteId,
+          saldoClienteAnterior: data.saldoTotal,
+          saldoClienteRestante: nuevoSaldo,
+        });
+      } catch {
+        batchStorageWarning = pagoIds.length > 1;
+      }
       navigate(`/pagos/${pagoIds[0]}/recibo`, {
         replace: true,
         state: {
@@ -114,6 +127,7 @@ export function CobranzaAbonoPage() {
           clienteId,
           saldoClienteAnterior: data.saldoTotal,
           saldoClienteRestante: nuevoSaldo,
+          batchStorageWarning,
         },
       });
     } catch (cause) {

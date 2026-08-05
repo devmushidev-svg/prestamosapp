@@ -2,8 +2,10 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAuth } from "../auth/AuthContext";
 import {
   listOfflineOperations,
+  isNetworkFailure,
   removeOfflineOperation,
   setOfflineUserScope,
+  setPreferOfflineCache,
   subscribeOfflineChanges,
   type OfflineOperation,
 } from "../lib/offlineDb";
@@ -21,8 +23,10 @@ type OfflineState = {
   issues: OfflineOperation[];
   lastSync: string | null;
   storagePersistent: boolean | null;
+  protectingStorage: boolean;
   error: string;
   syncNow: () => Promise<void>;
+  protectStorage: () => Promise<void>;
   retryIssue: (id: string) => Promise<void>;
   discardIssue: (id: string) => Promise<void>;
 };
@@ -56,6 +60,7 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
   const [issues, setIssues] = useState<OfflineOperation[]>([]);
   const [lastSync, setLastSync] = useState<string | null>(null);
   const [storagePersistent, setStoragePersistent] = useState<boolean | null>(null);
+  const [protectingStorage, setProtectingStorage] = useState(false);
   const [error, setError] = useState("");
   const runningRef = useRef<Promise<void> | null>(null);
 
@@ -76,6 +81,7 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
   const syncNow = useCallback(async () => {
     if (!userId || !navigator.onLine) {
       setOnline(navigator.onLine);
+      if (!navigator.onLine) setPreferOfflineCache(true);
       await refreshCounts().catch(() => undefined);
       return;
     }
@@ -91,37 +97,36 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
       try {
         const authResult = await supabase.auth.refreshSession();
         if (authResult.error || !authResult.data.session) {
+          if (!authResult.error || isNetworkFailure(authResult.error)) setPreferOfflineCache(true);
           setError("La sesión necesita validarse otra vez. Inicie sesión con Internet; los cambios seguirán guardados.");
           return;
         }
+        setPreferOfflineCache(false);
         const result = await syncOfflineOperations();
+        if (result.attention > 0 || result.pending > 0) {
+          setPrepared(await isOfflineWorkspacePrepared().catch(() => false));
+          if (result.attention > 0) {
+            setError(`${result.attention} operación requiere revisión. La copia local con esos cambios se conservó.`);
+          } else {
+            setPreferOfflineCache(true);
+            setError(`${result.pending} operación sigue pendiente. La copia local se conservó y se reintentará con una conexión estable.`);
+          }
+          return;
+        }
         await prepareOfflineWorkspace();
         if (!(await isOfflineWorkspacePrepared())) {
           throw new Error("La copia local quedó incompleta. Vuelva a pulsar Preparar datos offline.");
         }
         setPrepared(true);
-        if (result.attention > 0) {
-          setError(`${result.attention} operación requiere revisión antes de reemplazar la copia local.`);
-        } else if (result.pending > 0) {
-          setError(`${result.pending} operación sigue pendiente. Se reintentará cuando la conexión sea estable.`);
-        } else {
-          const timestamp = new Date().toISOString();
-          try {
-            window.localStorage.setItem(lastSyncKey(userId), timestamp);
-          } catch {
-            // La fecha visible no es crítica para la copia local.
-          }
-          setLastSync(timestamp);
-        }
+        const timestamp = new Date().toISOString();
         try {
-          const persisted = typeof navigator.storage?.persist === "function"
-            ? await navigator.storage.persist()
-            : null;
-          setStoragePersistent(persisted);
+          window.localStorage.setItem(lastSyncKey(userId), timestamp);
         } catch {
-          setStoragePersistent(false);
+          // La fecha visible no es crítica para la copia local.
         }
+        setLastSync(timestamp);
       } catch (cause) {
+        if (isNetworkFailure(cause)) setPreferOfflineCache(true);
         setError(cause instanceof Error ? cause.message : "No se pudo completar la sincronización.");
       } finally {
         await refreshCounts().catch(() => undefined);
@@ -134,6 +139,24 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
     });
     return runningRef.current;
   }, [hasSession, refreshCounts, userId]);
+
+  const protectStorage = useCallback(async () => {
+    if (typeof navigator.storage?.persist !== "function") {
+      setStoragePersistent(null);
+      return;
+    }
+    // La solicitud se inicia antes del primer await para conservar el gesto
+    // directo del clic; Chrome/Edge deciden si conceden la protección.
+    const persistenceRequest = navigator.storage.persist();
+    setProtectingStorage(true);
+    try {
+      setStoragePersistent(await persistenceRequest);
+    } catch {
+      setStoragePersistent(false);
+    } finally {
+      setProtectingStorage(false);
+    }
+  }, []);
 
   const retryIssue = useCallback(async (id: string) => {
     await retryOfflineOperation(id);
@@ -190,6 +213,7 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
     };
     const handleOffline = () => {
       setOnline(false);
+      setPreferOfflineCache(true);
       setError("");
       void refreshCounts().catch(() => undefined);
     };
@@ -217,12 +241,14 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
       issues,
       lastSync,
       storagePersistent,
+      protectingStorage,
       error,
       syncNow,
+      protectStorage,
       retryIssue,
       discardIssue,
     }),
-    [online, syncing, preparing, prepared, pending, attention, issues, lastSync, storagePersistent, error, syncNow, retryIssue, discardIssue],
+    [online, syncing, preparing, prepared, pending, attention, issues, lastSync, storagePersistent, protectingStorage, error, syncNow, protectStorage, retryIssue, discardIssue],
   );
   return <OfflineContext.Provider value={value}>{children}</OfflineContext.Provider>;
 }

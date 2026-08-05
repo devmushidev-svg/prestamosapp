@@ -18,8 +18,7 @@ function isMissingTable(error: { code?: string; message?: string }) {
 
 export const BUSINESS_CONFIG_CACHE_KEY = "business-config";
 
-export async function getBusinessConfig(): Promise<BusinessConfigResult> {
-  return readThroughCache(BUSINESS_CONFIG_CACHE_KEY, async () => {
+export async function downloadBusinessConfig(): Promise<BusinessConfigResult> {
     const { data, error } = await supabase
       .from("configuracion_prestamista")
       .select("id,nombre_negocio,nombre_propietario,rtn,direccion,telefono,prefijo_recibo,digitos_recibo,creado_en,actualizado_en")
@@ -29,7 +28,10 @@ export async function getBusinessConfig(): Promise<BusinessConfigResult> {
     if (error && isMissingTable(error)) return { status: "missing_schema", config: null } as const;
     if (error) throw error;
     return { status: "ready", config: (data as ConfiguracionPrestamista | null) ?? null } as const;
-  });
+}
+
+export async function getBusinessConfig(): Promise<BusinessConfigResult> {
+  return readThroughCache(BUSINESS_CONFIG_CACHE_KEY, downloadBusinessConfig);
 }
 
 function optionalText(value: string | null) {

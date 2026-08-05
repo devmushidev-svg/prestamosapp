@@ -11,6 +11,7 @@ import {
   resolveOfflineAlias,
   updateCache,
   writeCache,
+  type OfflineOperation,
 } from "./offlineDb";
 
 export type ClienteResumen = Pick<Cliente, "id" | "nombre" | "identidad" | "telefono" | "direccion"> & {
@@ -82,8 +83,7 @@ export async function listCustomersForLoan(): Promise<ClienteResumen[]> {
     }));
 }
 
-export async function listLoans(): Promise<PrestamoConCliente[]> {
-  return readThroughCache(LOANS_CACHE_KEY, async () => {
+export async function downloadLoans(): Promise<PrestamoConCliente[]> {
     const pageSize = 500;
     const rows: RawLoanWithCustomer[] = [];
     for (let from = 0; ; from += pageSize) {
@@ -98,11 +98,13 @@ export async function listLoans(): Promise<PrestamoConCliente[]> {
       rows.push(...batch);
       if (batch.length < pageSize) return rows.map(normalizeLoan);
     }
-  });
 }
 
-export async function listAllInstallments(): Promise<Cuota[]> {
-  return readThroughCache(INSTALLMENTS_CACHE_KEY, async () => {
+export async function listLoans(): Promise<PrestamoConCliente[]> {
+  return readThroughCache(LOANS_CACHE_KEY, downloadLoans);
+}
+
+export async function downloadAllInstallments(): Promise<Cuota[]> {
     const pageSize = 500;
     const rows: Cuota[] = [];
     for (let from = 0; ; from += pageSize) {
@@ -118,22 +120,47 @@ export async function listAllInstallments(): Promise<Cuota[]> {
       rows.push(...batch);
       if (batch.length < pageSize) return rows;
     }
-  });
+}
+
+export async function listAllInstallments(): Promise<Cuota[]> {
+  return readThroughCache(INSTALLMENTS_CACHE_KEY, downloadAllInstallments);
+}
+
+async function buildLoanDetailFromWorkspace(id: string, resolvedId: string): Promise<PrestamoDetalle | null> {
+  const [loans, installments] = await Promise.all([
+    readCache<PrestamoConCliente[]>(LOANS_CACHE_KEY),
+    readCache<Cuota[]>(INSTALLMENTS_CACHE_KEY),
+  ]);
+  const loan = loans?.find((item) => item.id === id || item.id === resolvedId);
+  if (!loan || !installments) return null;
+  return {
+    ...loan,
+    cuotas: installments.filter((item) => item.prestamo_id === loan.id).map(normalizeInstallment),
+  };
+}
+
+function operationKeepsLoanDetail(operation: OfflineOperation, ids: Set<string>) {
+  if (operation.type === "loan.create") return Boolean(operation.entityId && ids.has(operation.entityId));
+  if (operation.type !== "payment.create") return false;
+  const payload = operation.payload as { input?: { prestamoId?: string } };
+  return Boolean(payload.input?.prestamoId && ids.has(payload.input.prestamoId));
 }
 
 export async function getLoanDetail(id: string): Promise<PrestamoDetalle> {
   const resolvedId = await resolveOfflineAlias(id);
-  if (resolvedId !== id) {
-    const [local, operations] = await Promise.all([
+  const relevantIds = new Set([id, resolvedId]);
+  if (!navigator.onLine) {
+    const [local, resolvedLocal, operations, workspace] = await Promise.all([
       readCache<PrestamoDetalle>(loanDetailCacheKey(id)),
+      resolvedId === id ? Promise.resolve(undefined) : readCache<PrestamoDetalle>(loanDetailCacheKey(resolvedId)),
       listOfflineOperations(),
+      buildLoanDetailFromWorkspace(id, resolvedId),
     ]);
-    const keepsOptimisticPayment = operations.some((operation) => {
-      if (operation.type !== "payment.create") return false;
-      const payload = operation.payload as { input?: { prestamoId?: string } };
-      return payload.input?.prestamoId === id;
-    });
-    if (local && keepsOptimisticPayment) return local;
+    const optimistic = operations.some((operation) => operationKeepsLoanDetail(operation, relevantIds));
+    if (optimistic && (local || resolvedLocal)) return local ?? resolvedLocal!;
+    if (workspace) return workspace;
+    if (local || resolvedLocal) return local ?? resolvedLocal!;
+    throw new Error("Este préstamo todavía no forma parte de la copia offline completa.");
   }
   try {
     return await readThroughCache(loanDetailCacheKey(resolvedId), async () => {
@@ -150,15 +177,11 @@ export async function getLoanDetail(id: string): Promise<PrestamoDetalle> {
     });
   } catch (cause) {
     if (!isNetworkFailure(cause)) throw cause;
+    const workspace = await buildLoanDetailFromWorkspace(id, resolvedId);
+    if (workspace) return workspace;
     const local = await readCache<PrestamoDetalle>(loanDetailCacheKey(id));
     if (local) return local;
-    const [loans, installments] = await Promise.all([listLoans(), listAllInstallments()]);
-    const loan = loans.find((item) => item.id === id || item.id === resolvedId);
-    if (!loan) throw cause;
-    return {
-      ...loan,
-      cuotas: installments.filter((item) => item.prestamo_id === loan.id).map(normalizeInstallment),
-    };
+    throw cause;
   }
 }
 

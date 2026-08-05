@@ -32,8 +32,10 @@ export function OfflineControlCard() {
     issues,
     lastSync,
     storagePersistent,
+    protectingStorage,
     error,
     syncNow,
+    protectStorage,
     retryIssue,
     discardIssue,
   } = useOffline();
@@ -57,7 +59,7 @@ export function OfflineControlCard() {
               {online
                 ? "La aplicación puede descargar la cartera y enviar operaciones pendientes."
                 : prepared
-                  ? "La copia de clientes, préstamos, cuotas y cobros está guardada en este dispositivo."
+                  ? "La copia de clientes, préstamos, cuotas, cobros y fotos está guardada en este dispositivo."
                   : "Todavía no hay una copia preparada. Conéctese una vez antes de salir a cobrar."}
             </p>
             <p className="mt-2 text-xs font-medium text-pf-muted">{formatLastSync(lastSync, prepared)}</p>
@@ -88,9 +90,23 @@ export function OfflineControlCard() {
         ) : null}
       </div>
       {error ? <p className="mt-3 text-sm font-semibold text-pf-danger" role="alert">{error}</p> : null}
-      {prepared && storagePersistent === false ? (
-        <p className="mt-3 rounded-xl border border-pf-warning/25 bg-pf-warning-soft px-4 py-3 text-xs leading-relaxed text-pf-text-secondary">
-          El navegador no garantizó almacenamiento permanente. No borre los datos del sitio y abra la aplicación periódicamente con Internet para conservar la copia local.
+      {prepared && storagePersistent === true ? (
+        <p className="mt-3 rounded-xl border border-pf-success/25 bg-pf-success-soft px-4 py-3 text-xs font-semibold leading-relaxed text-pf-text-secondary">
+          Copia protegida contra la limpieza automática del navegador en este dispositivo.
+        </p>
+      ) : prepared && storagePersistent === false ? (
+        <div className="mt-3 flex flex-col gap-3 rounded-xl border border-pf-warning/25 bg-pf-warning-soft px-4 py-3 text-xs leading-relaxed text-pf-text-secondary sm:flex-row sm:items-center sm:justify-between">
+          <p>
+            La copia funciona, pero el navegador todavía podría limpiarla si falta espacio. Instale la aplicación y pulse el botón para solicitar protección.
+          </p>
+          <Button type="button" variant="secondary" className="shrink-0" onClick={() => void protectStorage()} disabled={protectingStorage}>
+            {protectingStorage ? <RefreshCw className="h-4 w-4 animate-spin" strokeWidth={2} aria-hidden /> : <CheckCircle2 className="h-4 w-4" strokeWidth={2} aria-hidden />}
+            {protectingStorage ? "Solicitando…" : "Proteger copia"}
+          </Button>
+        </div>
+      ) : prepared ? (
+        <p className="mt-3 rounded-xl border border-pf-border-soft bg-pf-surface-soft px-4 py-3 text-xs leading-relaxed text-pf-text-secondary">
+          Este navegador no permite confirmar la protección contra limpieza automática. No borre los datos del sitio ni use navegación privada.
         </p>
       ) : null}
       {issues.length > 0 ? (

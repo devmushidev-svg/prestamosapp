@@ -4,14 +4,14 @@ import { usePwaInstall } from "../hooks/usePwaInstall";
 import { useOffline } from "../offline/OfflineContext";
 
 export function OfflineStatus() {
-  const { online, syncing, prepared, pending, attention, error, syncNow } = useOffline();
+  const { online, syncing, prepared, pending, attention, storagePersistent, error, syncNow } = useOffline();
   const { appShellReady } = usePwaInstall();
   const navigate = useNavigate();
   const readyForOffline = appShellReady && prepared;
 
   const state = !online
-    ? readyForOffline
-      ? { label: pending ? `Sin conexión · ${pending} pendiente${pending === 1 ? "" : "s"}` : "Sin conexión", Icon: CloudOff, className: "border-pf-warning/35 bg-pf-warning-soft text-pf-warning" }
+      ? readyForOffline
+      ? { label: pending ? `Sin conexión · ${pending} cambio${pending === 1 ? "" : "s"} solo aquí` : "Sin conexión", Icon: CloudOff, className: "border-pf-warning/35 bg-pf-warning-soft text-pf-warning" }
       : { label: "Modo offline incompleto", Icon: TriangleAlert, className: "border-pf-danger/35 bg-pf-danger-soft text-pf-danger" }
     : attention > 0
       ? { label: `${attention} operación${attention === 1 ? "" : "es"} por revisar`, Icon: TriangleAlert, className: "border-pf-danger/35 bg-pf-danger-soft text-pf-danger" }
@@ -20,7 +20,9 @@ export function OfflineStatus() {
         : syncing
           ? { label: "Sincronizando…", Icon: RefreshCw, className: "border-pf-info/35 bg-pf-info-soft text-pf-info" }
         : pending > 0
-          ? { label: `Sincronizar ${pending} pendiente${pending === 1 ? "" : "s"}`, Icon: CloudUpload, className: "border-pf-primary/35 bg-pf-primary-soft text-pf-primary-hover" }
+          ? storagePersistent === true
+            ? { label: `Sincronizar ${pending} pendiente${pending === 1 ? "" : "s"}`, Icon: CloudUpload, className: "border-pf-primary/35 bg-pf-primary-soft text-pf-primary-hover" }
+            : { label: `${pending} cambio${pending === 1 ? "" : "s"} solo en este dispositivo`, Icon: TriangleAlert, className: "border-pf-warning/35 bg-pf-warning-soft text-pf-warning" }
           : !readyForOffline
             ? { label: "Preparar modo offline", Icon: CloudDownload, className: "border-pf-warning/35 bg-pf-warning-soft text-pf-warning" }
             : { label: "Listo sin Internet", Icon: CloudCheck, className: "border-pf-success/35 bg-pf-success-soft text-pf-success" };

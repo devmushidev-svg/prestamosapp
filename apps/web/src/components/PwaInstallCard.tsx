@@ -67,7 +67,7 @@ export function PwaInstallCard() {
             <div>
               <p className="text-sm font-extrabold text-pf-text">Preparar la cartera</p>
               <p className="mt-0.5 text-xs leading-relaxed text-pf-text-secondary">
-                {prepared ? "Clientes, préstamos, cuotas y cobros están guardados." : "Use “Preparar datos offline” en la tarjeta siguiente."}
+                {prepared ? "Clientes, préstamos, cuotas, cobros y fotos están guardados." : "Use “Preparar datos offline” en la tarjeta siguiente."}
               </p>
             </div>
           </div>

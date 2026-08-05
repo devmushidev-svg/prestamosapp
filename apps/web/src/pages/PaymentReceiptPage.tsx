@@ -1,10 +1,11 @@
 import { ArrowLeft, CheckCircle2, CloudOff, ImageIcon, Plus, Printer, ReceiptText } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { Button, Card, EmptyState } from "../components/ui";
 import { formatDate, formatLoanNumber, formatMoney, formatPaymentNumber } from "../lib/format";
 import { getPaymentDetails, type PaymentDetail } from "../lib/paymentService";
+import { findReceiptBatch, type ReceiptBatch } from "../lib/receiptBatchService";
 import {
   compartirReciboWhatsApp,
   emitirRecibo,
@@ -36,6 +37,7 @@ type ReceiptNavigationState = {
   clienteId?: string;
   saldoClienteAnterior?: number;
   saldoClienteRestante?: number;
+  batchStorageWarning?: boolean;
 };
 
 const EMPTY_RECEIPT_NAVIGATION_STATE: ReceiptNavigationState = {};
@@ -165,7 +167,17 @@ export function PaymentReceiptPage() {
   const [imageErrorKey, setImageErrorKey] = useState("");
   const [sharing, setSharing] = useState(false);
   const [shareNotice, setShareNotice] = useState<{ tone: "info" | "success" | "danger"; text: string } | null>(null);
-  const navigationState = (location.state as ReceiptNavigationState | null) ?? EMPTY_RECEIPT_NAVIGATION_STATE;
+  const locationNavigationState = (location.state as ReceiptNavigationState | null) ?? EMPTY_RECEIPT_NAVIGATION_STATE;
+  const [savedBatch, setSavedBatch] = useState<ReceiptBatch | null>(null);
+  const locationHasCompleteBatch = (locationNavigationState.pagoIds?.length ?? 0) > 1;
+  const [batchResolvedForPaymentId, setBatchResolvedForPaymentId] = useState(() =>
+    locationHasCompleteBatch ? paymentId : ""
+  );
+  const loadRequestRef = useRef(0);
+  const navigationState = useMemo<ReceiptNavigationState>(() => ({
+    ...savedBatch,
+    ...locationNavigationState,
+  }), [locationNavigationState, savedBatch]);
   const [createdNoticePaymentId] = useState(() => navigationState.created ? paymentId : "");
   const showCreated = createdNoticePaymentId === paymentId;
   const desdeCobranza = navigationState.origen === "cobranza";
@@ -184,12 +196,40 @@ export function PaymentReceiptPage() {
   }, [navigationState, paymentId]);
   const recibosCobranza = receiptIds.length > 1 ? receiptIds : [];
 
+  useEffect(() => {
+    loadRequestRef.current += 1;
+    setDetail(null);
+    setBatchDetails([]);
+    setError("");
+    setLoading(true);
+    if (!paymentId || locationHasCompleteBatch) {
+      setBatchResolvedForPaymentId(paymentId);
+      return;
+    }
+    let cancelled = false;
+    setSavedBatch(null);
+    void findReceiptBatch(paymentId)
+      .then((batch) => {
+        if (!cancelled) setSavedBatch(batch);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setBatchResolvedForPaymentId(paymentId);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [locationHasCompleteBatch, paymentId]);
+  const batchLookupComplete = locationHasCompleteBatch || batchResolvedForPaymentId === paymentId;
+
   const load = useCallback(async () => {
-    if (!paymentId) return;
+    if (!paymentId || !batchLookupComplete) return;
+    const requestId = ++loadRequestRef.current;
     setLoading(true);
     setError("");
     try {
       const details = await getPaymentDetails(receiptIds.length ? receiptIds : [paymentId]);
+      if (loadRequestRef.current !== requestId) return;
       const current = details.find((item) =>
         item.pago.id === paymentId || item.pago.solicitud_id === paymentId
       );
@@ -206,14 +246,20 @@ export function PaymentReceiptPage() {
         if (receivedCents !== Math.round(Number(navigationState.totalCobrado) * 100)) {
           throw new Error("El total del comprobante no coincide con los pagos registrados.");
         }
+        const previousBalanceCents = Math.round(Number(navigationState.saldoClienteAnterior) * 100);
+        const remainingBalanceCents = Math.round(Number(navigationState.saldoClienteRestante) * 100);
+        if (Math.max(0, previousBalanceCents - receivedCents) !== remainingBalanceCents) {
+          throw new Error("Los saldos del comprobante consolidado no son consistentes.");
+        }
       }
     } catch (cause) {
+      if (loadRequestRef.current !== requestId) return;
       const message = cause instanceof Error ? cause.message : "";
       setError(message || "No pudimos cargar este recibo. Revise la conexión e intente de nuevo.");
     } finally {
-      setLoading(false);
+      if (loadRequestRef.current === requestId) setLoading(false);
     }
-  }, [navigationState.clienteId, navigationState.totalCobrado, paymentId, receiptIds]);
+  }, [batchLookupComplete, navigationState.clienteId, navigationState.totalCobrado, paymentId, receiptIds]);
 
   useEffect(() => {
     void load();
@@ -340,6 +386,11 @@ export function PaymentReceiptPage() {
           <p className="mt-1 pl-7 text-xs font-medium leading-relaxed">
             El pago está guardado en este dispositivo. Al recuperar Internet se sincronizará y recibirá su número REC oficial.
           </p>
+        </div>
+      ) : null}
+      {navigationState.batchStorageWarning ? (
+        <div className="rounded-xl border border-pf-warning/30 bg-pf-warning-soft px-4 py-3 text-xs font-medium leading-relaxed text-pf-warning" role="status">
+          Los pagos quedaron registrados, pero este navegador no pudo guardar la agrupación del comprobante. Imprímalo o compártalo ahora; los recibos individuales siguen disponibles permanentemente.
         </div>
       ) : null}
       {showCreated ? (

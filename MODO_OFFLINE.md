@@ -22,15 +22,24 @@ inicio**.
 1. Entre a la aplicación con Internet al menos una vez.
 2. Abra **Configuraciones → Instalar y modo offline**.
 3. Pulse **Preparar datos offline** o **Sincronizar ahora**.
-4. Compruebe que muestra **Este dispositivo está listo para trabajar sin
-   Internet**, `0 pendientes` y una fecha de última sincronización.
+4. Pulse **Proteger copia** si el navegador muestra esa opción.
+5. Compruebe que muestra **Este dispositivo está listo para trabajar sin
+   Internet**, `0 pendientes`, una fecha de última sincronización y, cuando el
+   navegador lo conceda, **Copia protegida contra la limpieza automática**.
 
 La aplicación vuelve a sincronizar al recuperar la señal mientras está abierta
 o la próxima vez que se abra con Internet. El indicador flotante informa si
 está lista, sin conexión, enviando cambios o si algo requiere revisión.
 
-Abra la aplicación con Internet al menos una vez cada 7 días para renovar el
-acceso local. No borre los datos del sitio ni use navegación privada.
+El acceso local no caduca por tiempo: permanece hasta cerrar sesión o borrar
+los datos del sitio. Sin embargo, vuelva a sincronizar siempre que tenga señal
+para respaldar en Supabase los cobros hechos en la calle. No use navegación
+privada.
+
+La protección evita que el navegador limpie automáticamente la copia por falta
+de espacio, pero ninguna web puede impedir que una persona borre manualmente
+los datos, elimine el perfil o pierda el dispositivo. La copia definitiva de
+una operación es la que ya aparece sincronizada en Supabase.
 
 ## Pagos hechos sin señal
 
@@ -46,7 +55,8 @@ acceso local. No borre los datos del sitio ni use navegación privada.
 ## Casos que todavía necesitan Internet
 
 - El primer inicio de sesión en un dispositivo.
-- Subir o reemplazar fotografías de fachada/DNI.
+- Subir o reemplazar fotografías de fachada. Las fotos ya sincronizadas sí se
+  incluyen en la copia offline.
 - Cerrar sesión de forma segura.
 - Obtener el número oficial de un recibo provisional.
 

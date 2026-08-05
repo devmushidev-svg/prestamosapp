@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { countOfflineOperations, isNetworkFailure, setOfflineUserScope } from "../lib/offlineDb";
+import { countOfflineOperations, isNetworkFailure, setOfflineUserScope, setPreferOfflineCache } from "../lib/offlineDb";
 import { supabase } from "../lib/supabase";
 
 export type UserInfo = {
@@ -21,7 +21,6 @@ type AuthState = {
 
 const AuthContext = createContext<AuthState | null>(null);
 const OFFLINE_USER_KEY = "multiprestamos.offline-user";
-const OFFLINE_ACCESS_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 type StoredOfflineUser = {
   user: UserInfo;
@@ -38,9 +37,10 @@ function toUserInfo(session: Session | null): UserInfo | null {
 function readOfflineUser(): UserInfo | null {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(OFFLINE_USER_KEY) ?? "null") as StoredOfflineUser | null;
-    const validatedAt = Date.parse(parsed?.validatedAt ?? "");
-    const fresh = Number.isFinite(validatedAt) && Date.now() - validatedAt <= OFFLINE_ACCESS_TTL_MS;
-    return fresh && parsed?.user?.id && parsed.user.email ? parsed.user : null;
+    // La identidad solo abre la copia aislada para ese usuario dentro del
+    // perfil del navegador; no autoriza llamadas a Supabase. Se conserva hasta
+    // que el usuario cierre sesión, aunque pase mucho tiempo sin Internet.
+    return parsed?.user?.id && parsed.user.email ? parsed.user : null;
   } catch {
     return null;
   }
@@ -74,6 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const cached = readOfflineUser();
       setSession(null);
       if (!cached) {
+        setPreferOfflineCache(false);
         setOfflineUser(null);
         rememberOfflineUser(null);
         setOfflineUserScope(null);
@@ -81,6 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setOfflineUser(cached);
       setOfflineUserScope(cached.id);
+      setPreferOfflineCache(true);
       return true;
     };
 
@@ -89,13 +91,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setOfflineUser(null);
       rememberOfflineUser(null);
       setOfflineUserScope(null);
+      setPreferOfflineCache(false);
       lastAccessTokenRef.current = null;
     };
 
-    const useSession = (nextSession: Session) => {
+    const useSession = (nextSession: Session, remoteConfirmed = false) => {
       const nextUser = toUserInfo(nextSession);
       setSession(nextSession);
       setOfflineUser(null);
+      setPreferOfflineCache(!remoteConfirmed);
       lastAccessTokenRef.current = nextSession.access_token;
       if (!nextUser) return;
       rememberOfflineUser(nextUser);
@@ -129,19 +133,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       verificationTimers.add(timerId);
     };
 
-    // No se espera el reintento de Supabase (puede tardar ~30 s con un token
-    // vencido). Si el navegador sabe que no hay red, se abre la copia local de
-    // inmediato y la sesión remota se comprueba en segundo plano.
-    if (!navigator.onLine) {
-      useOfflineIdentity();
-      setLoading(false);
-    }
+    // Abra la copia recordada de inmediato, incluso cuando el sistema operativo
+    // dice que hay red pero Supabase no responde. La sesión remota se valida en
+    // segundo plano y una respuesta online definitiva puede cerrar este acceso.
+    if (useOfflineIdentity()) setLoading(false);
 
     supabase.auth
       .getSession()
       .then(({ data, error }) => {
         if (disposed) return;
         if (data.session) {
+          // getSession puede responder solo desde localStorage; refreshSession
+          // en OfflineProvider confirmará después el acceso real a Supabase.
           useSession(data.session);
           return;
         }
@@ -159,7 +162,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const { data: subscription } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (nextSession) {
-        useSession(nextSession);
+        useSession(nextSession, event !== "INITIAL_SESSION");
         return;
       }
       // La comprobación inicial ya está en curso arriba. Dejar que termine evita
@@ -226,6 +229,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setOfflineUser(null);
       rememberOfflineUser(null);
       setOfflineUserScope(null);
+      setPreferOfflineCache(false);
       lastAccessTokenRef.current = null;
     } finally {
       logoutRequestedRef.current = false;
