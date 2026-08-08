@@ -1,21 +1,14 @@
 import { formatDateOnly, formatLoanNumber, formatMoney } from "./format";
 import type { AgendaItem } from "./collectionAgendaService";
+import { buildWhatsAppChatUrl, normalizeHondurasPhone, openWhatsAppChat } from "./whatsappService";
+
+export { normalizeHondurasPhone } from "./whatsappService";
 
 export type WhatsAppReminder = {
   phone: string;
   text: string;
   url: string;
 };
-
-/** Convierte un teléfono local de 8 dígitos al formato internacional de Honduras. */
-export function normalizeHondurasPhone(value: string | null | undefined): string | null {
-  if (!value?.trim()) return null;
-  let digits = value.replace(/\D/g, "");
-  if (digits.startsWith("00")) digits = digits.slice(2);
-  if (digits.length === 8) digits = `504${digits}`;
-  if (digits.length < 8 || digits.length > 15) return null;
-  return digits;
-}
 
 function duePhrase(item: AgendaItem): string {
   const installments = `${item.cantidadCuotas} cuota${item.cantidadCuotas === 1 ? "" : "s"}`;
@@ -40,17 +33,12 @@ export function buildWhatsAppReminder(item: AgendaItem, businessName = "MultiPr�
   return {
     phone,
     text,
-    url: `https://wa.me/${phone}?text=${encodeURIComponent(text)}`,
+    url: buildWhatsAppChatUrl(phone, text)!,
   };
 }
 
 /** Intenta abrir WhatsApp en una pestaña nueva. */
 export function openWhatsAppReminder(item: AgendaItem, businessName?: string): boolean {
   const reminder = buildWhatsAppReminder(item, businessName);
-  if (!reminder || typeof window === "undefined") return false;
-  const target = window.open("about:blank", "_blank");
-  if (!target) return false;
-  target.opener = null;
-  target.location.href = reminder.url;
-  return true;
+  return reminder ? openWhatsAppChat(reminder.phone, reminder.text) : false;
 }

@@ -3,6 +3,7 @@
  * nativa solo cambia este módulo; las pantallas siguen llamando emitirRecibo.
  */
 import type { EstadoPrestamo, ReciboSnapshot } from "../types";
+import { openWhatsAppChat } from "./whatsappService";
 
 export type DatosRecibo = ReciboSnapshot;
 
@@ -510,11 +511,13 @@ function receiptShareText(data: DatosEmitibles) {
   return lines.join("\n");
 }
 
-function openWhatsAppText(data: DatosEmitibles) {
+function openWhatsAppText(data: DatosEmitibles, customerPhone?: string | null) {
+  const text = receiptShareText(data);
+  if (openWhatsAppChat(customerPhone, text)) return true;
   const target = window.open("about:blank", "_blank");
   if (!target) return false;
   target.opener = null;
-  target.location.href = `https://wa.me/?text=${encodeURIComponent(receiptShareText(data))}`;
+  target.location.href = `https://wa.me/?text=${encodeURIComponent(text)}`;
   return true;
 }
 
@@ -588,10 +591,11 @@ export function emitirRecibo(data: DatosEmitibles): void {
 
 export async function compartirReciboWhatsApp(
   data: DatosEmitibles,
-  preparedImage?: File | null
+  preparedImage?: File | null,
+  customerPhone?: string | null,
 ): Promise<ResultadoCompartirRecibo> {
   if (!preparedImage || preparedImage.size === 0) {
-    return { estado: "texto", whatsappAbierto: openWhatsAppText(data) };
+    return { estado: "texto", whatsappAbierto: openWhatsAppText(data, customerPhone) };
   }
   const image = preparedImage;
 
@@ -610,7 +614,7 @@ export async function compartirReciboWhatsApp(
     }
   }
 
-  const whatsappAbierto = openWhatsAppText(data);
+  const whatsappAbierto = openWhatsAppText(data, customerPhone);
   downloadReceiptImage(image);
   return { estado: "descargado", nombreArchivo: image.name, whatsappAbierto };
 }

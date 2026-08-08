@@ -9,6 +9,7 @@ import {
   Clock3,
   Eye,
   MessageCircle,
+  PhoneCall,
   WalletCards,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -24,6 +25,7 @@ import {
 } from "../lib/collectionAgendaService";
 import { formatDateOnly, formatLoanNumber, formatMoney } from "../lib/format";
 import { normalizeHondurasPhone, openWhatsAppReminder } from "../lib/reminderService";
+import { openWhatsAppChat } from "../lib/whatsappService";
 
 type AgendaViewFilter = AgendaFilter | "todas";
 
@@ -111,12 +113,20 @@ function AgendaMetricCard({
   );
 }
 
-function ItemActions({ item, onWhatsApp }: { item: AgendaItem; onWhatsApp: (item: AgendaItem) => void }) {
+function ItemActions({
+  item,
+  onWhatsApp,
+  onWhatsAppCall,
+}: {
+  item: AgendaItem;
+  onWhatsApp: (item: AgendaItem) => void;
+  onWhatsAppCall: (item: AgendaItem) => void;
+}) {
   const navigate = useNavigate();
   const loanNumber = formatLoanNumber(item.prestamoNumero, item.prestamoId);
   const hasValidPhone = Boolean(normalizeHondurasPhone(item.clienteTelefono));
   return (
-    <div className="grid grid-cols-3 gap-2 md:flex md:justify-end">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:flex md:justify-end">
       <Button
         type="button"
         className="min-h-10 px-2.5 py-2 text-xs"
@@ -132,11 +142,23 @@ function ItemActions({ item, onWhatsApp }: { item: AgendaItem; onWhatsApp: (item
         className="min-h-10 px-2.5 py-2 text-xs"
         onClick={() => onWhatsApp(item)}
         disabled={!hasValidPhone}
-        title={hasValidPhone ? "Enviar recordatorio por WhatsApp" : "El cliente no tiene un teléfono válido"}
-        aria-label={hasValidPhone ? `Recordar por WhatsApp a ${item.clienteNombre}` : `${item.clienteNombre} no tiene un teléfono válido`}
+        title={hasValidPhone ? "Preparar recordatorio en WhatsApp" : "El cliente no tiene un teléfono con formato válido"}
+        aria-label={hasValidPhone ? `Preparar recordatorio en WhatsApp para ${item.clienteNombre}` : `${item.clienteNombre} no tiene un teléfono con formato válido`}
       >
         <MessageCircle className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
         WhatsApp
+      </Button>
+      <Button
+        type="button"
+        variant="secondary"
+        className="min-h-10 px-2.5 py-2 text-xs"
+        onClick={() => onWhatsAppCall(item)}
+        disabled={!hasValidPhone}
+        title={hasValidPhone ? "Abrir el cliente en WhatsApp y confirmar allí la llamada" : "El cliente no tiene un teléfono con formato válido"}
+        aria-label={hasValidPhone ? `Abrir WhatsApp para llamar a ${item.clienteNombre}` : `${item.clienteNombre} no tiene un teléfono con formato válido`}
+      >
+        <PhoneCall className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+        Abrir para llamar
       </Button>
       <Button
         type="button"
@@ -201,6 +223,13 @@ export function AgendaPage() {
           ? "El navegador no permitió abrir WhatsApp. Habilite las ventanas emergentes e intente de nuevo."
           : `Agregue o corrija el teléfono de ${item.clienteNombre} para enviar el recordatorio.`
       );
+    }
+  }
+
+  function callByWhatsApp(item: AgendaItem) {
+    setActionError("");
+    if (!openWhatsAppChat(item.clienteTelefono, undefined, { fallbackSameTab: true })) {
+      setActionError(`Agregue o corrija el teléfono de ${item.clienteNombre}; debe tener un formato válido para WhatsApp.`);
     }
   }
 
@@ -389,10 +418,10 @@ export function AgendaPage() {
                   {normalizeHondurasPhone(item.clienteTelefono)
                     ? item.clienteTelefono
                     : item.clienteTelefono
-                      ? `${item.clienteTelefono} · no válido para WhatsApp`
+                      ? `${item.clienteTelefono} · formato no válido para WhatsApp`
                       : "Sin teléfono para recordatorio"}
                 </p>
-                <ItemActions item={item} onWhatsApp={sendReminder} />
+                <ItemActions item={item} onWhatsApp={sendReminder} onWhatsAppCall={callByWhatsApp} />
               </Card>
             ))}
           </div>
@@ -422,7 +451,7 @@ export function AgendaPage() {
                           {normalizeHondurasPhone(item.clienteTelefono)
                             ? item.clienteTelefono
                             : item.clienteTelefono
-                              ? `${item.clienteTelefono} · no válido para WhatsApp`
+                              ? `${item.clienteTelefono} · formato no válido para WhatsApp`
                               : "Sin teléfono"}
                         </p>
                       </td>
@@ -437,7 +466,7 @@ export function AgendaPage() {
                       <td className="whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums text-pf-text-secondary">
                         {formatMoney("L", item.saldoPrestamo)}
                       </td>
-                      <td className="px-4 py-3"><ItemActions item={item} onWhatsApp={sendReminder} /></td>
+                      <td className="px-4 py-3"><ItemActions item={item} onWhatsApp={sendReminder} onWhatsAppCall={callByWhatsApp} /></td>
                     </tr>
                   ))}
                 </tbody>

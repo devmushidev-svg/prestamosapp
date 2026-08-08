@@ -1,14 +1,17 @@
 import { ArrowLeft, CalendarClock, Camera, CheckCircle2, ClipboardX, Clock3, ExternalLink, HandCoins, History, MapPin, Navigation, Phone, ReceiptText, Route, TriangleAlert, UserRound, WalletCards } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { GestionSinCobroModal } from "../components/GestionSinCobroModal";
 import { LoanStatusBadge } from "../components/LoanStatusBadge";
 import { PageHero } from "../components/PageHero";
+import { WhatsAppContactActions } from "../components/WhatsAppContactActions";
 import { Button, Card, EmptyState } from "../components/ui";
 import { getClienteRuta, getHistorialCobranza, type ClienteRuta, type HistorialCobranzaItem } from "../lib/cobranzaService";
 import { getFacadePhotoUrl, uploadFacadePhoto } from "../lib/customerService";
 import { formatDate, formatDateOnly, formatLoanNumber, formatMoney } from "../lib/format";
 import { FREQUENCY_LABELS } from "../lib/loanCalculator";
+import { buildCollectionWhatsAppMessage } from "../lib/whatsappService";
 
 function SituacionCredito({ data }: { data: ClienteRuta }) {
   const totalCuotas = data.prestamos.reduce((total, item) => total + item.prestamo.plazo, 0);
@@ -143,6 +146,7 @@ function SituacionCredito({ data }: { data: ClienteRuta }) {
 
 export function CobranzaClientePage() {
   const navigate = useNavigate();
+  const { config } = useBusinessConfig();
   const { clienteId = "" } = useParams();
   const [data, setData] = useState<ClienteRuta | null>(null);
   const [loading, setLoading] = useState(true);
@@ -266,6 +270,17 @@ export function CobranzaClientePage() {
                 )}
               </p>
             </div>
+
+            <WhatsAppContactActions
+              phone={cliente!.telefono}
+              customerName={cliente!.nombre}
+              message={buildCollectionWhatsAppMessage({
+                clienteNombre: cliente!.nombre,
+                negocioNombre: config?.nombre_negocio,
+                pagoSugerido: data.pagoSugerido,
+                saldoTotal: data.saldoTotal,
+              })}
+            />
 
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
               {mapsUrl ? (

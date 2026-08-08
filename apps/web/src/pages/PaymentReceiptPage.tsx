@@ -16,6 +16,7 @@ import {
   type DatosEmitibles,
   type DatosRecibo,
 } from "../lib/receiptService";
+import { normalizeHondurasPhone } from "../lib/whatsappService";
 import type { ConfiguracionPrestamista } from "../types";
 
 const PAYMENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -308,6 +309,10 @@ export function PaymentReceiptPage() {
     };
   }, [batchDetails, config, navigationState.saldoClienteAnterior, navigationState.saldoClienteRestante]);
   const emitData: DatosEmitibles | null = consolidatedReceiptData ?? receiptData;
+  const customerPhone = detail?.prestamo.cliente?.telefono
+    ?? batchDetails.find((item) => item.prestamo.cliente?.telefono)?.prestamo.cliente?.telefono
+    ?? null;
+  const hasWhatsAppCustomerPhone = Boolean(normalizeHondurasPhone(customerPhone));
   const provisional = Boolean(detail?.pago.recibo?.startsWith("PEND-"));
   const receiptImageKey = useMemo(() => emitData ? JSON.stringify(emitData) : "", [emitData]);
   const receiptImage = preparedImage?.key === receiptImageKey ? preparedImage.file : null;
@@ -343,10 +348,10 @@ export function PaymentReceiptPage() {
     setSharing(true);
     setShareNotice(null);
     try {
-      const sharePromise = compartirReciboWhatsApp(emitData, receiptImage);
+      const sharePromise = compartirReciboWhatsApp(emitData, receiptImage, customerPhone);
       const result = await sharePromise;
       if (result.estado === "compartido") {
-        setShareNotice({ tone: "success", text: `${consolidatedReceiptData ? "Comprobante" : "Recibo"} compartido como imagen.` });
+        setShareNotice({ tone: "success", text: `${consolidatedReceiptData ? "Comprobante" : "Recibo"} compartido con la opción que seleccionó.` });
       } else if (result.estado === "descargado") {
         setShareNotice({
           tone: "info",
@@ -433,10 +438,15 @@ export function PaymentReceiptPage() {
       <div className="space-y-2 print:hidden">
         <div className="grid gap-2 sm:grid-cols-2">
           <Button type="button" className="min-h-[52px] sm:col-span-2" onClick={() => emitirRecibo(emitData)}><Printer className="h-5 w-5" strokeWidth={2} aria-hidden />{consolidatedReceiptData ? "Imprimir cobro completo / PDF" : "Imprimir / guardar PDF"}</Button>
-          <Button type="button" variant="secondary" disabled={sharing || preparingImage} onClick={() => void handleShareReceipt()}><ImageIcon className="h-4 w-4" strokeWidth={2} aria-hidden />{preparingImage ? "Preparando imagen…" : sharing ? "Compartiendo…" : consolidatedReceiptData ? "Compartir cobro completo" : "Compartir imagen"}</Button>
+          <Button type="button" variant="secondary" disabled={sharing || preparingImage} onClick={() => void handleShareReceipt()}><ImageIcon className="h-4 w-4" strokeWidth={2} aria-hidden />{preparingImage ? "Preparando imagen…" : sharing ? "Abriendo opciones…" : consolidatedReceiptData ? "Elegir WhatsApp para compartir cobro" : "Elegir WhatsApp para compartir recibo"}</Button>
           <Button type="button" variant="secondary" onClick={() => navigate(`/pagos/nuevo?prestamoId=${encodeURIComponent(detail.prestamo.id)}`)}><Plus className="h-4 w-4" strokeWidth={2} aria-hidden />Registrar otro pago</Button>
           <Button type="button" variant="ghost" className="sm:col-span-2" onClick={() => navigate(desdeCobranza ? "/cobranza" : `/prestamos/${detail.prestamo.id}`)}><ArrowLeft className="h-4 w-4" strokeWidth={2} aria-hidden />{desdeCobranza ? "Volver a la ruta" : "Volver al préstamo"}</Button>
         </div>
+        <p className={`rounded-xl border px-3 py-2 text-xs leading-relaxed ${hasWhatsAppCustomerPhone ? "border-pf-success-soft bg-pf-success-soft/35 text-pf-text-secondary" : "border-pf-warning-soft bg-pf-warning-soft/35 text-pf-warning"}`}>
+          {hasWhatsAppCustomerPhone
+            ? `Contacto esperado: ${emitData.clienteNombre} · ${customerPhone}. En el menú, elija WhatsApp y confirme este contacto antes de enviar la imagen.`
+            : "Este cliente no tiene un teléfono con formato válido para abrir su conversación directamente. La imagen todavía puede compartirse desde el menú del dispositivo."}
+        </p>
         {shareNotice ? (
           <p
             role={shareNotice.tone === "danger" ? "alert" : "status"}

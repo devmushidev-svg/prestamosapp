@@ -1,10 +1,13 @@
-import { AlertTriangle, CalendarClock, ChevronDown, ChevronUp, ExternalLink, MapPin, Navigation, Phone, Route, Search, UserRound } from "lucide-react";
+import { AlertTriangle, CalendarClock, ChevronDown, ChevronUp, ExternalLink, MapPin, Navigation, Route, Search, UserRound } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { PageHero } from "../components/PageHero";
+import { WhatsAppContactActions } from "../components/WhatsAppContactActions";
 import { Button, Card, EmptyState, Field, Input, Select } from "../components/ui";
 import { getRutaCobro, guardarOrdenRuta, type ClienteRuta, type RutaCobro } from "../lib/cobranzaService";
 import { formatDateOnly, formatMoney } from "../lib/format";
+import { buildCollectionWhatsAppMessage, normalizeHondurasPhone } from "../lib/whatsappService";
 
 type Orden = "pago_sugerido" | "pago_requerido" | "dias_atraso" | "colonia" | "manual";
 type TabRuta = "pendientes" | "visitados";
@@ -54,6 +57,7 @@ function sortClientes(items: ClienteRuta[], orden: Orden): ClienteRuta[] {
 
 export function RutaCobroPage() {
   const navigate = useNavigate();
+  const { config } = useBusinessConfig();
   const [data, setData] = useState<RutaCobro | null>(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
@@ -242,6 +246,7 @@ export function RutaCobroPage() {
       <PageHero title="Ruta de cobro" constrained>
         <p className="pf-page-lead max-w-2xl">Organice las visitas del día o busque cualquier cliente de la cartera activa.</p>
         <p className="pf-page-lead-muted">El pago sugerido suma lo atrasado, la cuota que vence hoy y las promesas exigibles.</p>
+        <p className="pf-page-lead-muted">Los accesos de contacto abren WhatsApp; confirme la llamada dentro de la conversación.</p>
       </PageHero>
 
       {data?.migracionPendiente ? (
@@ -513,15 +518,25 @@ export function RutaCobroPage() {
                               <ChevronDown className="h-5 w-5" strokeWidth={2} aria-hidden />
                             </Button>
                           </>
-                        ) : item.cliente.telefono ? (
-                          <a
-                            href={`tel:${item.cliente.telefono}`}
-                            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-pf-primary transition-colors hover:bg-pf-primary-soft"
-                            aria-label={`Llamar a ${item.cliente.nombre}`}
-                          >
-                            <Phone className="h-5 w-5" strokeWidth={2} aria-hidden />
-                          </a>
-                        ) : null}
+                        ) : normalizeHondurasPhone(item.cliente.telefono) ? (
+                          <WhatsAppContactActions
+                            phone={item.cliente.telefono}
+                            customerName={item.cliente.nombre}
+                            message={buildCollectionWhatsAppMessage({
+                              clienteNombre: item.cliente.nombre,
+                              negocioNombre: config?.nombre_negocio,
+                              pagoSugerido: item.pagoSugerido,
+                              saldoTotal: item.saldoTotal,
+                            })}
+                            compact
+                            stacked
+                            showCallHint={false}
+                          />
+                        ) : (
+                          <span className="w-14 text-center text-[10px] font-bold leading-tight text-pf-muted">
+                            Sin teléfono válido
+                          </span>
+                        )}
                       </div>
                     </div>
                   </Card>

@@ -4,8 +4,10 @@ import { useNavigate } from "react-router-dom";
 import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { CustomerStatusBadge } from "../components/CustomerStatusBadge";
 import { PageHero } from "../components/PageHero";
+import { WhatsAppContactActions } from "../components/WhatsAppContactActions";
 import { Button, Card, EmptyState, Field, Input, Modal, PaginationBar, Select, Textarea } from "../components/ui";
 import { listCustomers, saveCustomer, type CustomerInput } from "../lib/customerService";
+import { buildCollectionWhatsAppMessage } from "../lib/whatsappService";
 import type { Cliente, EstadoCliente } from "../types";
 
 const EMPTY_FORM: CustomerInput = {
@@ -23,7 +25,7 @@ const PAGE_SIZE = 12;
 
 export function CustomersPage() {
   const navigate = useNavigate();
-  const { status: businessConfigStatus } = useBusinessConfig();
+  const { config, status: businessConfigStatus } = useBusinessConfig();
   const [list, setList] = useState<Cliente[]>([]);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
@@ -188,6 +190,15 @@ export function CustomersPage() {
                   <p className="flex min-w-0 items-start gap-2"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-pf-muted" strokeWidth={2} aria-hidden /><span className="min-w-0 break-words">{[customer.direccion, customer.colonia && `Col. ${customer.colonia}`].filter(Boolean).join(" · ") || "Sin dirección"}</span></p>
                   {customer.lugar_trabajo ? <p className="flex min-w-0 items-center gap-2"><BriefcaseBusiness className="h-4 w-4 shrink-0 text-pf-muted" strokeWidth={2} aria-hidden /><span className="min-w-0 break-words">{customer.lugar_trabajo}</span></p> : null}
                 </div>
+                <WhatsAppContactActions
+                  phone={customer.telefono}
+                  customerName={customer.nombre}
+                  message={buildCollectionWhatsAppMessage({
+                    clienteNombre: customer.nombre,
+                    negocioNombre: config?.nombre_negocio,
+                  })}
+                  showCallHint={false}
+                />
                 <div className="grid grid-cols-2 gap-2 border-t border-pf-border-soft pt-3">
                   <Button type="button" className="px-2" aria-label={`Crear préstamo para ${customer.nombre}`} disabled={customer.estado === "cancelado"} onClick={() => newLoan(customer)}>
                     <FilePlus2 className="h-4 w-4" strokeWidth={2} aria-hidden />Préstamo
@@ -219,7 +230,19 @@ export function CustomersPage() {
                     <tr key={customer.id} className="pf-table-row">
                       <td className="px-4 py-3 font-bold text-pf-text">{customer.nombre}</td>
                       <td className="px-4 py-3 text-pf-text-secondary">{customer.identidad || "—"}</td>
-                      <td className="px-4 py-3 text-pf-text-secondary">{customer.telefono || "—"}</td>
+                      <td className="px-4 py-3 text-pf-text-secondary">
+                        <p>{customer.telefono || "—"}</p>
+                        <WhatsAppContactActions
+                          phone={customer.telefono}
+                          customerName={customer.nombre}
+                          message={buildCollectionWhatsAppMessage({
+                            clienteNombre: customer.nombre,
+                            negocioNombre: config?.nombre_negocio,
+                          })}
+                          compact
+                          className="mt-1.5"
+                        />
+                      </td>
                       <td className="max-w-[260px] px-4 py-3"><p className="truncate text-pf-text-secondary">{[customer.direccion, customer.colonia && `Col. ${customer.colonia}`].filter(Boolean).join(" · ") || "Sin dirección"}</p>{customer.lugar_trabajo ? <p className="truncate text-xs text-pf-muted">{customer.lugar_trabajo}</p> : null}</td>
                       <td className="px-4 py-3"><CustomerStatusBadge status={customer.estado} /></td>
                       <td className="px-4 py-3"><div className="flex justify-end gap-2"><Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Ver estado de cuenta de ${customer.nombre}`} onClick={() => viewStatement(customer)}><FileText className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Estado de cuenta</Button><Button type="button" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Crear préstamo para ${customer.nombre}`} disabled={customer.estado === "cancelado"} onClick={() => newLoan(customer)}><FilePlus2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Préstamo</Button><Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Editar cliente ${customer.nombre}`} onClick={() => openEdit(customer)}><Pencil className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Editar</Button></div></td>
