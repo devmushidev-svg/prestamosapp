@@ -2,12 +2,14 @@ import type { LucideIcon } from "lucide-react";
 import { AlertTriangle, Banknote, CalendarRange, Download, HandCoins, Landmark, Percent, Printer, ReceiptText, Search, TrendingUp } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useProfile } from "../auth/ProfileContext";
 import { LoanStatusBadge } from "../components/LoanStatusBadge";
 import { PageHero } from "../components/PageHero";
 import { Button, Card, EmptyState, Field, Input, PaginationBar, Select } from "../components/ui";
 import { formatDate, formatDateOnly, formatLoanNumber, formatMoney, formatPaymentNumber } from "../lib/format";
 import { downloadPortfolioCsv, getPortfolioReport, type PortfolioReport } from "../lib/reportService";
-import type { EstadoPrestamo } from "../types";
+import { listUsers } from "../lib/userService";
+import type { EstadoPrestamo, Profile } from "../types";
 
 const PAGE_SIZE = 12;
 type StatusFilter = "todos" | EstadoPrestamo;
@@ -58,6 +60,7 @@ function MetricCard({ label, value, detail, icon: Icon, tone }: {
 
 export function ReportsPage() {
   const navigate = useNavigate();
+  const { isAdmin } = useProfile();
   const [draftRange, setDraftRange] = useState(initialRange);
   const [range, setRange] = useState(initialRange);
   const [report, setReport] = useState<PortfolioReport | null>(null);
@@ -66,8 +69,15 @@ export function ReportsPage() {
   const [rangeError, setRangeError] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<StatusFilter>("todos");
+  const [prestamistaId, setPrestamistaId] = useState("todos");
+  const [team, setTeam] = useState<Profile[]>([]);
   const [page, setPage] = useState(1);
   const requestRef = useRef(0);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    listUsers().then(setTeam).catch(() => setTeam([]));
+  }, [isAdmin]);
 
   const load = useCallback(async () => {
     const request = ++requestRef.current;
@@ -92,19 +102,20 @@ export function ReportsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [search, status]);
+  }, [search, status, prestamistaId]);
 
   const filteredRows = useMemo(() => {
     if (!report) return [];
     const term = search.trim().toLocaleLowerCase("es-HN");
     return report.rows.filter((row) => {
       if (status !== "todos" && row.prestamo.estado !== status) return false;
+      if (isAdmin && prestamistaId !== "todos" && row.prestamo.prestamista_id !== prestamistaId) return false;
       if (!term) return true;
       return [row.prestamo.cliente?.nombre, formatLoanNumber(row.prestamo.numero, row.prestamo.id)]
         .filter(Boolean)
         .some((value) => value!.toLocaleLowerCase("es-HN").includes(term));
     });
-  }, [report, search, status]);
+  }, [report, search, status, prestamistaId, isAdmin]);
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const visibleRows = filteredRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
@@ -136,11 +147,21 @@ export function ReportsPage() {
         </div>
       </div>
 
-      <Card className="grid gap-3 p-4 print:hidden sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1.2fr_1fr_auto] lg:items-end">
+      <Card className={`grid gap-3 p-4 print:hidden sm:grid-cols-2 lg:items-end ${isAdmin ? "lg:grid-cols-[1fr_1fr_1.1fr_1fr_1fr_auto]" : "lg:grid-cols-[1fr_1fr_1.2fr_1fr_auto]"}`}>
         <Field label="Desde" htmlFor="report-from"><Input id="report-from" type="date" value={draftRange.desde} onChange={(event) => setDraftRange((current) => ({ ...current, desde: event.target.value }))} /></Field>
         <Field label="Hasta" htmlFor="report-to"><Input id="report-to" type="date" value={draftRange.hasta} onChange={(event) => setDraftRange((current) => ({ ...current, hasta: event.target.value }))} /></Field>
         <Field label="Buscar cartera" htmlFor="report-search"><div className="relative"><Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-pf-muted" strokeWidth={2} aria-hidden /><Input id="report-search" className="pl-10" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Cliente o préstamo" /></div></Field>
         <Field label="Estado" htmlFor="report-status"><Select id="report-status" value={status} onChange={(event) => setStatus(event.target.value as StatusFilter)}><option value="todos">Todos</option><option value="activo">Activo</option><option value="al_dia">Al día</option><option value="en_mora">En mora</option><option value="pagado">Pagado</option><option value="cancelado">Cancelado</option></Select></Field>
+        {isAdmin ? (
+          <Field label="Prestamista" htmlFor="report-prestamista">
+            <Select id="report-prestamista" value={prestamistaId} onChange={(event) => setPrestamistaId(event.target.value)}>
+              <option value="todos">Todos</option>
+              {team.map((member) => (
+                <option key={member.id} value={member.id}>{member.nombre} {member.apellido ?? ""}</option>
+              ))}
+            </Select>
+          </Field>
+        ) : null}
         <Button type="button" className="min-h-[48px]" onClick={applyRange}><CalendarRange className="h-4 w-4" strokeWidth={2} aria-hidden />Aplicar</Button>
       </Card>
       {rangeError ? <p className="rounded-xl border border-pf-danger-soft bg-pf-danger-soft/40 px-4 py-3 text-sm font-medium text-pf-danger print:hidden" role="alert">{rangeError}</p> : null}

@@ -1,0 +1,8 @@
+# Config mínima para desplegar las Edge Functions con la Supabase CLI:
+#   supabase functions deploy invite-user --project-ref jblpeajvgqtsbnghbfch
+# El secreto se configura aparte (nunca en este archivo ni en el repo):
+#   supabase secrets set SUPABASE_SERVICE_ROLE_KEY=... --project-ref jblpeajvgqtsbnghbfch
+project_id = "jblpeajvgqtsbnghbfch"
+
+[functions.invite-user]
+verify_jwt = true

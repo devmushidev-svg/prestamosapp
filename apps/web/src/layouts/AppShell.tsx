@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Banknote, BarChart3, Building2, CalendarClock, ChevronDown, FileClock, FilePlus2, HandCoins, Home, LogOut, Menu, MonitorSmartphone, Route, Settings, Settings2, User, Users, Wallet, X } from "lucide-react";
+import { Banknote, BarChart3, Building2, CalendarClock, ChevronDown, FileClock, FilePlus2, HandCoins, Home, LogOut, Menu, MonitorSmartphone, Route, Settings, Settings2, User, UserCog, Users, Wallet, X } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { useProfile } from "../auth/ProfileContext";
 import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { BrandLockup, BrandLogo } from "../components/BrandLogo";
 import { OfflineStatus } from "../components/OfflineStatus";
@@ -59,6 +60,10 @@ const RIBBON: Record<TabId, RibbonGroupDef[]> = {
     {
       title: "Negocio",
       items: [{ to: "/configuracion", label: "Datos del prestamista", icon: Settings2 }],
+    },
+    {
+      title: "Equipo",
+      items: [{ to: "/configuracion/usuarios", label: "Usuarios", icon: UserCog, end: true }],
     },
   ],
   ajustes: [
@@ -156,6 +161,7 @@ function RibbonLink({ item, onNavigate, stack }: { item: NavItem; onNavigate?: (
 
 function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
   const location = useLocation();
+  const { isAdmin } = useProfile();
   const activeSection = tabFromPath(location.pathname);
   const [openSections, setOpenSections] = useState<Record<TabId, boolean>>(() => ({
     inicio: false,
@@ -191,7 +197,7 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
       </nav>
 
       <div className="space-y-2">
-        {TABS.filter((tab) => tab.id !== "inicio").map((tab) => {
+        {TABS.filter((tab) => tab.id !== "inicio" && (isAdmin || tab.id !== "empresa")).map((tab) => {
           const TabIcon = tab.icon;
           const groups = RIBBON[tab.id].filter((g) => g.items.length > 0);
           if (groups.length === 0) return null;
@@ -244,6 +250,7 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
 
 export function AppShell({ children }: { children?: ReactNode }) {
   const { user, logout } = useAuth();
+  const { isAdmin } = useProfile();
   const { config } = useBusinessConfig();
   const location = useLocation();
   const navigate = useNavigate();
@@ -251,6 +258,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
   const [activeTab, setActiveTab] = useState<TabId>(() => tabFromPath(location.pathname));
   const [sessionError, setSessionError] = useState("");
   const mobileDrawerRef = useRef<HTMLElement>(null);
+  const visibleTabs = isAdmin ? TABS : TABS.filter((tab) => tab.id !== "empresa");
 
   useEffect(() => {
     setActiveTab(tabFromPath(location.pathname));
@@ -380,6 +388,10 @@ export function AppShell({ children }: { children?: ReactNode }) {
             </div>
             <div className="pf-mobile-drawer-foot p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] space-y-2 backdrop-blur-sm">
               <p className="truncate text-xs text-pf-muted">{user?.email}</p>
+              <Button variant="secondary" className="w-full" onClick={() => { setMenuOpen(false); navigate("/perfil"); }}>
+                <User className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+                Mi perfil
+              </Button>
               <Button variant="secondary" className="w-full" onClick={onLogout}>
                 <LogOut className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
                 Salir
@@ -403,7 +415,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
             className="pf-top-tabs-shell flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto rounded-lg px-0.5 py-1 [scrollbar-width:thin] sm:px-1"
             aria-label="Sección principal"
           >
-            {TABS.map((tab) => {
+            {visibleTabs.map((tab) => {
               const TabIcon = tab.icon;
               return (
                 <button
@@ -423,13 +435,14 @@ export function AppShell({ children }: { children?: ReactNode }) {
           </nav>
 
           <div className="flex shrink-0 items-center gap-2 border-l border-white/15 pl-2 lg:pl-3">
-            <span
-              className="hidden max-w-[160px] items-center gap-1.5 truncate text-sm text-pf-text-soft min-[1100px]:inline-flex"
+            <NavLink
+              to="/perfil"
+              className="hidden max-w-[160px] items-center gap-1.5 truncate text-sm text-pf-text-soft hover:text-pf-text min-[1100px]:inline-flex"
               title={user?.email}
             >
               <User className="h-4 w-4 shrink-0 text-pf-muted" strokeWidth={2} aria-hidden />
               <span className="truncate">{user?.displayName}</span>
-            </span>
+            </NavLink>
             <button
               type="button"
               className="inline-flex items-center gap-1.5 text-sm font-medium text-pf-text-soft hover:text-pf-text"

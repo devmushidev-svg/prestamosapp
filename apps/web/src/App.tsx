@@ -1,9 +1,12 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
+import { useProfile } from "./auth/ProfileContext";
 import { RequireBusinessConfig } from "./business/RequireBusinessConfig";
+import { Button, Card } from "./components/ui";
 import { AppShell } from "./layouts/AppShell";
 import { LoginPage } from "./pages/LoginPage";
+import { SetPasswordPage } from "./pages/SetPasswordPage";
 
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const CustomersPage = lazy(() => import("./pages/CustomersPage").then((m) => ({ default: m.CustomersPage })));
@@ -22,6 +25,8 @@ const AjustesPage = lazy(() => import("./pages/AjustesPage").then((m) => ({ defa
 const RutaCobroPage = lazy(() => import("./pages/RutaCobroPage").then((m) => ({ default: m.RutaCobroPage })));
 const CobranzaClientePage = lazy(() => import("./pages/CobranzaClientePage").then((m) => ({ default: m.CobranzaClientePage })));
 const CobranzaAbonoPage = lazy(() => import("./pages/CobranzaAbonoPage").then((m) => ({ default: m.CobranzaAbonoPage })));
+const UsersPage = lazy(() => import("./pages/UsersPage").then((m) => ({ default: m.UsersPage })));
+const AccountPage = lazy(() => import("./pages/AccountPage").then((m) => ({ default: m.AccountPage })));
 
 function RouteFallback() {
   return (
@@ -32,7 +37,8 @@ function RouteFallback() {
 }
 
 function Protected({ children }: { children: ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, loading, logout } = useAuth();
+  const { status: profileStatus } = useProfile();
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-pf-surface text-pf-muted">
@@ -41,6 +47,32 @@ function Protected({ children }: { children: ReactNode }) {
     );
   }
   if (!user) return <Navigate to="/login" replace />;
+  if (profileStatus === "inactive") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-pf-surface px-4">
+        <Card className="max-w-md p-6 text-center">
+          <p className="font-bold text-pf-text">Su cuenta está desactivada</p>
+          <p className="mt-2 text-sm text-pf-muted">
+            Contacte al administrador de su empresa para recuperar el acceso.
+          </p>
+          <Button type="button" className="mt-4" onClick={() => void logout()}>Salir</Button>
+        </Card>
+      </div>
+    );
+  }
+  return <>{children}</>;
+}
+
+function RequireAdmin({ children }: { children: ReactNode }) {
+  const { status, isAdmin } = useProfile();
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-pf-surface text-pf-muted">
+        Cargando…
+      </div>
+    );
+  }
+  if (!isAdmin) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -48,6 +80,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/restablecer-password" element={<SetPasswordPage />} />
       <Route
         path="/configuracion/inicial"
         element={
@@ -76,7 +109,9 @@ export default function App() {
         <Route path="prestamos" element={<LoansPage />} />
         <Route path="prestamos/nuevo" element={<NewLoanPage />} />
         <Route path="prestamos/:loanId" element={<LoanDetailPage />} />
-        <Route path="configuracion" element={<BusinessSettingsPage />} />
+        <Route path="configuracion" element={<RequireAdmin><BusinessSettingsPage /></RequireAdmin>} />
+        <Route path="configuracion/usuarios" element={<RequireAdmin><UsersPage /></RequireAdmin>} />
+        <Route path="perfil" element={<AccountPage />} />
         <Route path="cobranza" element={<RutaCobroPage />} />
         <Route path="cobranza/:clienteId" element={<CobranzaClientePage />} />
         <Route path="cobranza/:clienteId/abono" element={<CobranzaAbonoPage />} />

@@ -123,6 +123,7 @@ function normalizeLoan(row: RawStatementLoan, today: string): CustomerStatementL
     saldo,
     estado: row.estado,
     solicitud_id: row.solicitud_id ?? null,
+    prestamista_id: row.prestamista_id ?? "",
     creado_en: row.creado_en,
     cuotas,
     pagos,

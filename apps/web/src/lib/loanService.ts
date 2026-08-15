@@ -3,6 +3,7 @@ import { supabase } from "./supabase";
 import type { Cliente, Cuota, DiaPagoSemana, EstadoCliente, Prestamo } from "../types";
 import { listCustomers } from "./customerService";
 import {
+  getOfflineUserScope,
   isNetworkFailure,
   listOfflineOperations,
   queueOfflineOperation,
@@ -53,6 +54,7 @@ function normalizeLoan(row: RawLoanWithCustomer): PrestamoConCliente {
     saldo: Number(row.saldo),
     estado: row.estado,
     solicitud_id: row.solicitud_id ?? null,
+    prestamista_id: row.prestamista_id ?? "",
     creado_en: row.creado_en,
     cliente: relatedCustomer,
   };
@@ -269,6 +271,7 @@ export async function createFixedLoan(
       saldo: calculation.totalPagar,
       estado: "activo",
       solicitud_id: input.solicitudId,
+      prestamista_id: getOfflineUserScope() ?? "",
       creado_en: creadoEn,
       cliente,
     };

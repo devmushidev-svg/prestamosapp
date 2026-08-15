@@ -19,14 +19,18 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useProfile } from "../auth/ProfileContext";
 import { InstallmentSchedule } from "../components/InstallmentSchedule";
 import { LoanStatusBadge } from "../components/LoanStatusBadge";
 import { PageHero } from "../components/PageHero";
+import { ReassignUserModal } from "../components/ReassignUserModal";
 import { Button, Card, EmptyState } from "../components/ui";
 import { formatDate, formatDateOnly, formatLoanNumber, formatMoney, formatPaymentNumber } from "../lib/format";
 import { formatLoanPlan, FREQUENCY_LABELS, WEEKDAY_LABELS } from "../lib/loanCalculator";
 import { getLoanDetail, type PrestamoDetalle } from "../lib/loanService";
 import { listPayments, refreshPortfolioStatuses, type PaymentSummary } from "../lib/paymentService";
+import { listUsers, reasignarPrestamo } from "../lib/userService";
+import type { Profile } from "../types";
 
 function SummaryCard({
   label,
@@ -64,6 +68,7 @@ export function LoanDetailPage() {
   const { loanId = "" } = useParams<{ loanId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const { isAdmin } = useProfile();
   const [loan, setLoan] = useState<PrestamoDetalle | null>(null);
   const [payments, setPayments] = useState<PaymentSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,6 +76,8 @@ export function LoanDetailPage() {
   const [historyError, setHistoryError] = useState("");
   const [showAllInstallments, setShowAllInstallments] = useState(false);
   const [showAllHistory, setShowAllHistory] = useState(false);
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const [teamMembers, setTeamMembers] = useState<Profile[]>([]);
   const requestRef = useRef(0);
   const [showCreated] = useState(() => Boolean((location.state as { created?: boolean } | null)?.created));
 
@@ -113,6 +120,15 @@ export function LoanDetailPage() {
   useEffect(() => {
     if (showCreated) navigate(location.pathname, { replace: true, state: null });
   }, [location.pathname, navigate, showCreated]);
+
+  async function openReassign() {
+    try {
+      setTeamMembers((await listUsers()).filter((member) => member.activo));
+    } catch {
+      setTeamMembers([]);
+    }
+    setReassignOpen(true);
+  }
 
   if (loading) {
     return <Card className="p-10 text-center text-sm font-medium text-pf-muted" aria-live="polite">Cargando préstamo…</Card>;
@@ -173,6 +189,12 @@ export function LoanDetailPage() {
               <Button type="button" variant="secondary" onClick={() => navigate(`/clientes/${loan.cliente_id}/estado-cuenta`)}>
                 <FileText className="h-4 w-4" strokeWidth={2} aria-hidden />
                 Estado de cuenta
+              </Button>
+            ) : null}
+            {isAdmin ? (
+              <Button type="button" variant="secondary" onClick={() => void openReassign()}>
+                <UserRound className="h-4 w-4" strokeWidth={2} aria-hidden />
+                Reasignar
               </Button>
             ) : null}
             {acceptsPayments ? (
@@ -447,6 +469,18 @@ export function LoanDetailPage() {
           </div>
         </div>
       ) : null}
+
+      <ReassignUserModal
+        open={reassignOpen}
+        title="Reasignar préstamo"
+        users={teamMembers}
+        currentUserId={loan.prestamista_id}
+        onClose={() => setReassignOpen(false)}
+        onConfirm={async (userId) => {
+          await reasignarPrestamo(loan.id, userId);
+          await load();
+        }}
+      />
     </div>
   );
 }

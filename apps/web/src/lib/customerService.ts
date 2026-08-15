@@ -26,8 +26,8 @@ export type CustomerInput = {
   notas: string;
 };
 
-const FULL_SELECT = "id,nombre,identidad,telefono,direccion,colonia,lugar_trabajo,referencias,foto_fachada_path,estado,notas,orden_ruta,creado_en";
-const EXTENDED_SELECT = "id,nombre,identidad,telefono,direccion,colonia,lugar_trabajo,referencias,estado,notas,orden_ruta,creado_en";
+const FULL_SELECT = "id,nombre,identidad,telefono,direccion,colonia,lugar_trabajo,referencias,foto_fachada_path,estado,notas,orden_ruta,prestamista_id,creado_en";
+const EXTENDED_SELECT = "id,nombre,identidad,telefono,direccion,colonia,lugar_trabajo,referencias,estado,notas,orden_ruta,prestamista_id,creado_en";
 const LEGACY_SELECT = "id,nombre,identidad,telefono,direccion,notas,creado_en";
 
 function isMissingExtendedColumns(error: { code?: string; message?: string }) {
@@ -49,6 +49,7 @@ function normalizeCustomer(row: Partial<Cliente> & Pick<Cliente, "id" | "nombre"
     estado: row.estado ?? "activo",
     notas: row.notas ?? null,
     orden_ruta: row.orden_ruta ?? null,
+    prestamista_id: row.prestamista_id ?? "",
     creado_en: row.creado_en,
   };
 }

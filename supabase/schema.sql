@@ -425,9 +425,240 @@ create index if not exists idx_gestiones_fecha on gestiones (fecha);
 -- La ruta de cobro lee todas las cuotas no pagadas de la cartera.
 create index if not exists idx_cuotas_estado_vencimiento on cuotas (estado, fecha_vencimiento);
 
--- RLS: acceso total para usuarios autenticados (los usuarios se crean a mano
--- en el panel de Supabase: Authentication → Users → Add user).
--- ponytail: política única de un solo negocio; políticas por rol llegan si algún día hay multi-usuario con permisos.
+-- ============================================================
+-- Usuarios, roles y empresas (admin / prestamista, ampliable)
+-- ============================================================
+-- Cada instalación tiene una o más empresas; cada usuario de Supabase Auth
+-- tiene un `profiles` con su rol y su empresa. El rol solo controla permisos
+-- administrativos: la cartera (clientes/prestamos) se reparte por
+-- `prestamista_id` dentro de la misma empresa, y se reasigna sin perder el
+-- historial de pagos/gestiones (que quedan con su propio `registrado_por`).
+
+create table if not exists empresas (
+  id uuid primary key default gen_random_uuid(),
+  nombre text not null check (btrim(nombre) <> ''),
+  activo boolean not null default true,
+  creado_en timestamptz not null default now()
+);
+
+-- El check incluye roles futuros (gerente/cobrador/supervisor) para que la
+-- base no rechace datos cuando la interfaz los habilite; hoy solo se usan
+-- 'admin' y 'prestamista', y cualquier rol distinto de 'admin' recibe el
+-- mismo trato restringido que 'prestamista' hasta que se defina lo contrario.
+create table if not exists profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  empresa_id uuid not null references empresas(id),
+  nombre text not null check (btrim(nombre) <> ''),
+  apellido text,
+  email text not null,
+  telefono text,
+  rol text not null default 'prestamista'
+    check (rol in ('admin', 'prestamista', 'gerente', 'cobrador', 'supervisor')),
+  activo boolean not null default true,
+  creado_por uuid references profiles(id),
+  creado_en timestamptz not null default now(),
+  actualizado_en timestamptz not null default now()
+);
+alter table profiles add column if not exists apellido text;
+alter table profiles add column if not exists telefono text;
+alter table profiles add column if not exists activo boolean not null default true;
+alter table profiles add column if not exists creado_por uuid references profiles(id);
+alter table profiles add column if not exists actualizado_en timestamptz not null default now();
+create index if not exists idx_profiles_empresa on profiles (empresa_id);
+
+-- Instalación existente sin empresas/perfiles: crea la empresa por defecto
+-- (con el nombre del negocio ya configurado, si existe) y da rol admin a
+-- todos los usuarios de Supabase Auth que ya existían antes de esta migración.
+do $$
+declare
+  v_empresa_id uuid;
+begin
+  if not exists (select 1 from empresas) then
+    insert into empresas (nombre)
+    values (coalesce(
+      nullif(btrim((select nombre_negocio from configuracion_prestamista where id = 1)), ''),
+      'Mi Empresa'
+    ))
+    returning id into v_empresa_id;
+  else
+    select id into v_empresa_id from empresas order by creado_en limit 1;
+  end if;
+
+  insert into profiles (id, empresa_id, nombre, email, rol, activo)
+  select
+    u.id,
+    v_empresa_id,
+    coalesce(nullif(btrim(split_part(u.email, '@', 1)), ''), 'Administrador'),
+    u.email,
+    'admin',
+    true
+  from auth.users u
+  where not exists (select 1 from profiles p where p.id = u.id);
+end $$;
+
+-- Funciones auxiliares "security definer": leen `profiles` sin pasar por su
+-- propia RLS (evita el error de recursión) y sirven de base a todas las
+-- políticas de abajo.
+create or replace function public.current_empresa_id()
+returns uuid
+language sql
+security definer
+stable
+set search_path = ''
+as $$
+  select empresa_id from public.profiles where id = auth.uid();
+$$;
+
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+stable
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.profiles where id = auth.uid() and rol = 'admin' and activo
+  );
+$$;
+
+create or replace function public.is_active_profile()
+returns boolean
+language sql
+security definer
+stable
+set search_path = ''
+as $$
+  select coalesce((select activo from public.profiles where id = auth.uid()), false);
+$$;
+
+revoke all on function public.current_empresa_id() from public, anon;
+grant execute on function public.current_empresa_id() to authenticated;
+revoke all on function public.is_admin() from public, anon;
+grant execute on function public.is_admin() to authenticated;
+revoke all on function public.is_active_profile() from public, anon;
+grant execute on function public.is_active_profile() to authenticated;
+
+-- Un usuario nunca puede cambiar su propio rol/estado/empresa (ni siquiera
+-- siendo admin) y una empresa nunca se queda sin al menos un admin activo.
+create or replace function public.profiles_guard_self_changes()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.id = auth.uid() and (
+    new.rol is distinct from old.rol
+    or new.activo is distinct from old.activo
+    or new.empresa_id is distinct from old.empresa_id
+  ) then
+    raise exception using message = 'No puede modificar su propio rol, estado o empresa.', errcode = '42501';
+  end if;
+  if old.rol = 'admin' and (new.rol is distinct from old.rol or (new.activo is distinct from old.activo and not new.activo))
+    and not exists (
+      select 1 from public.profiles p
+      where p.empresa_id = old.empresa_id and p.rol = 'admin' and p.activo and p.id <> old.id
+    ) then
+    raise exception using message = 'Debe existir al menos un administrador activo en la empresa.', errcode = '23514';
+  end if;
+  new.actualizado_en := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_profiles_guard_self_changes on profiles;
+create trigger trg_profiles_guard_self_changes
+  before update on profiles
+  for each row execute function public.profiles_guard_self_changes();
+
+alter table empresas enable row level security;
+alter table profiles enable row level security;
+
+drop policy if exists "empresas_select" on empresas;
+create policy "empresas_select" on empresas
+  for select to authenticated using (id = public.current_empresa_id());
+
+drop policy if exists "profiles_select" on profiles;
+drop policy if exists "profiles_insert_admin" on profiles;
+drop policy if exists "profiles_update" on profiles;
+create policy "profiles_select" on profiles
+  for select to authenticated
+  using (id = auth.uid() or (empresa_id = public.current_empresa_id() and public.is_admin()));
+create policy "profiles_insert_admin" on profiles
+  for insert to authenticated
+  with check (empresa_id = public.current_empresa_id() and public.is_admin());
+create policy "profiles_update" on profiles
+  for update to authenticated
+  using (id = auth.uid() or (empresa_id = public.current_empresa_id() and public.is_admin()))
+  with check (id = auth.uid() or (empresa_id = public.current_empresa_id() and public.is_admin()));
+
+-- Cartera: empresa_id aísla entre empresas; prestamista_id reparte la cartera
+-- dentro de la empresa (admin ve y gestiona todo; el resto solo lo suyo).
+alter table clientes add column if not exists empresa_id uuid;
+alter table clientes add column if not exists prestamista_id uuid;
+alter table clientes add column if not exists creado_por uuid;
+alter table prestamos add column if not exists empresa_id uuid;
+alter table prestamos add column if not exists prestamista_id uuid;
+alter table prestamos add column if not exists creado_por uuid;
+alter table pagos add column if not exists registrado_por uuid;
+alter table gestiones add column if not exists creado_por uuid;
+
+do $$
+declare
+  v_empresa_id uuid;
+  v_admin_id uuid;
+begin
+  select id into v_empresa_id from empresas order by creado_en limit 1;
+  select id into v_admin_id from profiles
+    where empresa_id = v_empresa_id and rol = 'admin' order by creado_en limit 1;
+
+  update clientes set empresa_id = v_empresa_id where empresa_id is null;
+  update clientes set prestamista_id = v_admin_id where prestamista_id is null;
+  update clientes set creado_por = v_admin_id where creado_por is null;
+  update prestamos set empresa_id = v_empresa_id where empresa_id is null;
+  update prestamos set prestamista_id = v_admin_id where prestamista_id is null;
+  update prestamos set creado_por = v_admin_id where creado_por is null;
+  update pagos set registrado_por = v_admin_id where registrado_por is null;
+  update gestiones set creado_por = v_admin_id where creado_por is null;
+end $$;
+
+alter table clientes alter column empresa_id set not null;
+alter table clientes alter column prestamista_id set not null;
+alter table clientes alter column empresa_id set default public.current_empresa_id();
+alter table clientes alter column prestamista_id set default auth.uid();
+alter table clientes alter column creado_por set default auth.uid();
+alter table prestamos alter column empresa_id set not null;
+alter table prestamos alter column prestamista_id set not null;
+alter table prestamos alter column empresa_id set default public.current_empresa_id();
+alter table prestamos alter column prestamista_id set default auth.uid();
+alter table prestamos alter column creado_por set default auth.uid();
+alter table pagos alter column registrado_por set default auth.uid();
+alter table gestiones alter column creado_por set default auth.uid();
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'clientes_empresa_fk' and conrelid = 'public.clientes'::regclass) then
+    alter table clientes add constraint clientes_empresa_fk foreign key (empresa_id) references empresas(id);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'clientes_prestamista_fk' and conrelid = 'public.clientes'::regclass) then
+    alter table clientes add constraint clientes_prestamista_fk foreign key (prestamista_id) references profiles(id);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'prestamos_empresa_fk' and conrelid = 'public.prestamos'::regclass) then
+    alter table prestamos add constraint prestamos_empresa_fk foreign key (empresa_id) references empresas(id);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'prestamos_prestamista_fk' and conrelid = 'public.prestamos'::regclass) then
+    alter table prestamos add constraint prestamos_prestamista_fk foreign key (prestamista_id) references profiles(id);
+  end if;
+end $$;
+
+create index if not exists idx_clientes_empresa on clientes (empresa_id);
+create index if not exists idx_clientes_prestamista on clientes (prestamista_id);
+create index if not exists idx_prestamos_empresa on prestamos (empresa_id);
+create index if not exists idx_prestamos_prestamista on prestamos (prestamista_id);
+
+-- RLS: acceso por empresa y por prestamista (los usuarios se crean por
+-- invitación desde Configuración → Usuarios, o a mano en el panel de
+-- Supabase para el primer administrador).
 alter table clientes enable row level security;
 alter table prestamos enable row level security;
 alter table cuotas enable row level security;
@@ -437,28 +668,93 @@ alter table pago_aplicaciones enable row level security;
 alter table gestiones enable row level security;
 
 drop policy if exists "autenticados" on clientes;
+drop policy if exists "clientes_select" on clientes;
+drop policy if exists "clientes_insert" on clientes;
+drop policy if exists "clientes_update" on clientes;
+create policy "clientes_select" on clientes for select to authenticated
+  using (empresa_id = public.current_empresa_id() and public.is_active_profile() and (public.is_admin() or prestamista_id = auth.uid()));
+create policy "clientes_insert" on clientes for insert to authenticated
+  with check (empresa_id = public.current_empresa_id() and public.is_active_profile() and (public.is_admin() or prestamista_id = auth.uid()));
+create policy "clientes_update" on clientes for update to authenticated
+  using (empresa_id = public.current_empresa_id() and public.is_active_profile() and (public.is_admin() or prestamista_id = auth.uid()))
+  with check (empresa_id = public.current_empresa_id() and (public.is_admin() or prestamista_id = auth.uid()));
+
 drop policy if exists "autenticados" on prestamos;
+drop policy if exists "prestamos_select" on prestamos;
+drop policy if exists "prestamos_insert" on prestamos;
+drop policy if exists "prestamos_update" on prestamos;
+create policy "prestamos_select" on prestamos for select to authenticated
+  using (empresa_id = public.current_empresa_id() and public.is_active_profile() and (public.is_admin() or prestamista_id = auth.uid()));
+create policy "prestamos_insert" on prestamos for insert to authenticated
+  with check (empresa_id = public.current_empresa_id() and public.is_active_profile() and (public.is_admin() or prestamista_id = auth.uid()));
+create policy "prestamos_update" on prestamos for update to authenticated
+  using (empresa_id = public.current_empresa_id() and public.is_active_profile() and (public.is_admin() or prestamista_id = auth.uid()))
+  with check (empresa_id = public.current_empresa_id() and (public.is_admin() or prestamista_id = auth.uid()));
+
 drop policy if exists "autenticados" on cuotas;
+create policy "cuotas_all" on cuotas for all to authenticated
+  using (exists (
+    select 1 from public.prestamos p
+    where p.id = cuotas.prestamo_id and p.empresa_id = public.current_empresa_id()
+      and public.is_active_profile() and (public.is_admin() or p.prestamista_id = auth.uid())
+  ))
+  with check (exists (
+    select 1 from public.prestamos p
+    where p.id = cuotas.prestamo_id and p.empresa_id = public.current_empresa_id()
+      and public.is_active_profile() and (public.is_admin() or p.prestamista_id = auth.uid())
+  ));
+
 drop policy if exists "autenticados" on pagos;
+create policy "pagos_all" on pagos for all to authenticated
+  using (exists (
+    select 1 from public.prestamos p
+    where p.id = pagos.prestamo_id and p.empresa_id = public.current_empresa_id()
+      and public.is_active_profile() and (public.is_admin() or p.prestamista_id = auth.uid())
+  ))
+  with check (exists (
+    select 1 from public.prestamos p
+    where p.id = pagos.prestamo_id and p.empresa_id = public.current_empresa_id()
+      and public.is_active_profile() and (public.is_admin() or p.prestamista_id = auth.uid())
+  ));
+
+drop policy if exists "autenticados" on pago_aplicaciones;
+create policy "pago_aplicaciones_all" on pago_aplicaciones for all to authenticated
+  using (exists (
+    select 1 from public.prestamos p
+    where p.id = pago_aplicaciones.prestamo_id and p.empresa_id = public.current_empresa_id()
+      and public.is_active_profile() and (public.is_admin() or p.prestamista_id = auth.uid())
+  ))
+  with check (exists (
+    select 1 from public.prestamos p
+    where p.id = pago_aplicaciones.prestamo_id and p.empresa_id = public.current_empresa_id()
+      and public.is_active_profile() and (public.is_admin() or p.prestamista_id = auth.uid())
+  ));
+
+drop policy if exists "autenticados" on gestiones;
+create policy "gestiones_all" on gestiones for all to authenticated
+  using (exists (
+    select 1 from public.clientes c
+    where c.id = gestiones.cliente_id and c.empresa_id = public.current_empresa_id()
+      and public.is_active_profile() and (public.is_admin() or c.prestamista_id = auth.uid())
+  ))
+  with check (exists (
+    select 1 from public.clientes c
+    where c.id = gestiones.cliente_id and c.empresa_id = public.current_empresa_id()
+      and public.is_active_profile() and (public.is_admin() or c.prestamista_id = auth.uid())
+  ));
+
+-- Los datos del negocio (recibos) los lee cualquier usuario activo de la
+-- empresa, pero solo un admin puede crearlos o editarlos.
 drop policy if exists "autenticados" on configuracion_prestamista;
 drop policy if exists "configuracion_leer" on configuracion_prestamista;
 drop policy if exists "configuracion_insertar" on configuracion_prestamista;
 drop policy if exists "configuracion_actualizar" on configuracion_prestamista;
-drop policy if exists "autenticados" on pago_aplicaciones;
-drop policy if exists "autenticados" on gestiones;
-
-create policy "autenticados" on clientes for all to authenticated using (true) with check (true);
-create policy "autenticados" on prestamos for all to authenticated using (true) with check (true);
-create policy "autenticados" on cuotas for all to authenticated using (true) with check (true);
-create policy "autenticados" on pagos for all to authenticated using (true) with check (true);
 create policy "configuracion_leer" on configuracion_prestamista
   for select to authenticated using (id = 1);
 create policy "configuracion_insertar" on configuracion_prestamista
-  for insert to authenticated with check (id = 1);
+  for insert to authenticated with check (id = 1 and public.is_admin());
 create policy "configuracion_actualizar" on configuracion_prestamista
-  for update to authenticated using (id = 1) with check (id = 1);
-create policy "autenticados" on pago_aplicaciones for all to authenticated using (true) with check (true);
-create policy "autenticados" on gestiones for all to authenticated using (true) with check (true);
+  for update to authenticated using (id = 1 and public.is_admin()) with check (id = 1 and public.is_admin());
 
 -- Fotos privadas de fachadas. Se sirven con enlaces temporales y solo los
 -- usuarios autenticados pueden leerlas o modificarlas.
@@ -953,6 +1249,85 @@ $$;
 
 revoke all on function public.registrar_pago(uuid, uuid, numeric) from public, anon;
 grant execute on function public.registrar_pago(uuid, uuid, numeric) to authenticated;
+
+-- Reasigna un préstamo a otro prestamista de la misma empresa. Solo un admin
+-- puede llamarla. El historial (pagos, gestiones) conserva quién los hizo
+-- realmente; solo cambia quién administra el préstamo de ahora en adelante.
+create or replace function public.reasignar_prestamo(
+  p_prestamo_id uuid,
+  p_prestamista_id uuid
+)
+returns void
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_empresa_id uuid;
+  v_updated uuid;
+begin
+  if not public.is_admin() then
+    raise exception using message = 'Solo un administrador puede reasignar préstamos.', errcode = '42501';
+  end if;
+  v_empresa_id := public.current_empresa_id();
+
+  perform 1 from public.profiles
+  where id = p_prestamista_id and empresa_id = v_empresa_id and activo;
+  if not found then
+    raise exception using message = 'El prestamista indicado no existe o no pertenece a su empresa.', errcode = '23503';
+  end if;
+
+  update public.prestamos
+  set prestamista_id = p_prestamista_id
+  where id = p_prestamo_id and empresa_id = v_empresa_id
+  returning id into v_updated;
+  if v_updated is null then
+    raise exception using message = 'El préstamo no existe.', errcode = '23503';
+  end if;
+end;
+$$;
+
+revoke all on function public.reasignar_prestamo(uuid, uuid) from public, anon;
+grant execute on function public.reasignar_prestamo(uuid, uuid) to authenticated;
+
+-- Reasigna un cliente (y por lo tanto su ficha y ruta de cobro) a otro
+-- prestamista de la misma empresa, sin tocar los préstamos ya asignados.
+create or replace function public.reasignar_cliente(
+  p_cliente_id uuid,
+  p_prestamista_id uuid
+)
+returns void
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_empresa_id uuid;
+  v_updated uuid;
+begin
+  if not public.is_admin() then
+    raise exception using message = 'Solo un administrador puede reasignar clientes.', errcode = '42501';
+  end if;
+  v_empresa_id := public.current_empresa_id();
+
+  perform 1 from public.profiles
+  where id = p_prestamista_id and empresa_id = v_empresa_id and activo;
+  if not found then
+    raise exception using message = 'El prestamista indicado no existe o no pertenece a su empresa.', errcode = '23503';
+  end if;
+
+  update public.clientes
+  set prestamista_id = p_prestamista_id
+  where id = p_cliente_id and empresa_id = v_empresa_id
+  returning id into v_updated;
+  if v_updated is null then
+    raise exception using message = 'El cliente no existe.', errcode = '23503';
+  end if;
+end;
+$$;
+
+revoke all on function public.reasignar_cliente(uuid, uuid) from public, anon;
+grant execute on function public.reasignar_cliente(uuid, uuid) to authenticated;
 
 -- Refresca vencimientos y mora de calendario al abrir Panel/Cartera. La tasa
 -- pactada queda guardada, pero todavía no se suma un recargo monetario al saldo.

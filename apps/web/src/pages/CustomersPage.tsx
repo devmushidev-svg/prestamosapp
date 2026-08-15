@@ -1,14 +1,17 @@
-import { AlertTriangle, BriefcaseBusiness, FilePlus2, FileText, MapPin, Pencil, Phone, ReceiptText, Search, UserPlus, UserRound, Users } from "lucide-react";
+import { AlertTriangle, BriefcaseBusiness, FilePlus2, FileText, MapPin, Pencil, Phone, ReceiptText, Search, UserCog, UserPlus, UserRound, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { useProfile } from "../auth/ProfileContext";
 import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { CustomerStatusBadge } from "../components/CustomerStatusBadge";
 import { PageHero } from "../components/PageHero";
+import { ReassignUserModal } from "../components/ReassignUserModal";
 import { WhatsAppContactActions } from "../components/WhatsAppContactActions";
 import { Button, Card, EmptyState, Field, Input, Modal, PaginationBar, Select, Textarea } from "../components/ui";
 import { listCustomers, saveCustomer, type CustomerInput } from "../lib/customerService";
+import { listUsers, reasignarCliente } from "../lib/userService";
 import { buildCollectionWhatsAppMessage } from "../lib/whatsappService";
-import type { Cliente, EstadoCliente } from "../types";
+import type { Cliente, EstadoCliente, Profile } from "../types";
 
 const EMPTY_FORM: CustomerInput = {
   nombre: "",
@@ -25,6 +28,7 @@ const PAGE_SIZE = 12;
 
 export function CustomersPage() {
   const navigate = useNavigate();
+  const { isAdmin } = useProfile();
   const { config, status: businessConfigStatus } = useBusinessConfig();
   const [list, setList] = useState<Cliente[]>([]);
   const [query, setQuery] = useState("");
@@ -36,6 +40,8 @@ export function CustomersPage() {
   const [listErr, setListErr] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [reassignTarget, setReassignTarget] = useState<Cliente | null>(null);
+  const [teamMembers, setTeamMembers] = useState<Profile[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -121,6 +127,15 @@ export function CustomersPage() {
 
   function viewStatement(customer: Cliente) {
     navigate(`/clientes/${encodeURIComponent(customer.id)}/estado-cuenta`);
+  }
+
+  async function openReassign(customer: Cliente) {
+    try {
+      setTeamMembers((await listUsers()).filter((member) => member.activo));
+    } catch {
+      setTeamMembers([]);
+    }
+    setReassignTarget(customer);
   }
 
   return (
@@ -209,6 +224,11 @@ export function CustomersPage() {
                   <Button type="button" variant="secondary" className="col-span-2 px-2" aria-label={`Ver estado de cuenta de ${customer.nombre}`} onClick={() => viewStatement(customer)}>
                     <FileText className="h-4 w-4" strokeWidth={2} aria-hidden />Estado de cuenta
                   </Button>
+                  {isAdmin ? (
+                    <Button type="button" variant="secondary" className="col-span-2 px-2" aria-label={`Reasignar ${customer.nombre}`} onClick={() => void openReassign(customer)}>
+                      <UserCog className="h-4 w-4" strokeWidth={2} aria-hidden />Reasignar prestamista
+                    </Button>
+                  ) : null}
                 </div>
               </Card>
             ))}
@@ -245,7 +265,7 @@ export function CustomersPage() {
                       </td>
                       <td className="max-w-[260px] px-4 py-3"><p className="truncate text-pf-text-secondary">{[customer.direccion, customer.colonia && `Col. ${customer.colonia}`].filter(Boolean).join(" · ") || "Sin dirección"}</p>{customer.lugar_trabajo ? <p className="truncate text-xs text-pf-muted">{customer.lugar_trabajo}</p> : null}</td>
                       <td className="px-4 py-3"><CustomerStatusBadge status={customer.estado} /></td>
-                      <td className="px-4 py-3"><div className="flex justify-end gap-2"><Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Ver estado de cuenta de ${customer.nombre}`} onClick={() => viewStatement(customer)}><FileText className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Estado de cuenta</Button><Button type="button" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Crear préstamo para ${customer.nombre}`} disabled={customer.estado === "cancelado"} onClick={() => newLoan(customer)}><FilePlus2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Préstamo</Button><Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Editar cliente ${customer.nombre}`} onClick={() => openEdit(customer)}><Pencil className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Editar</Button></div></td>
+                      <td className="px-4 py-3"><div className="flex justify-end gap-2"><Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Ver estado de cuenta de ${customer.nombre}`} onClick={() => viewStatement(customer)}><FileText className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Estado de cuenta</Button><Button type="button" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Crear préstamo para ${customer.nombre}`} disabled={customer.estado === "cancelado"} onClick={() => newLoan(customer)}><FilePlus2 className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Préstamo</Button><Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Editar cliente ${customer.nombre}`} onClick={() => openEdit(customer)}><Pencil className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Editar</Button>{isAdmin ? <Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Reasignar ${customer.nombre}`} onClick={() => void openReassign(customer)}><UserCog className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Reasignar</Button> : null}</div></td>
                     </tr>
                   ))}
                 </tbody>
@@ -271,6 +291,19 @@ export function CustomersPage() {
           <div className="flex flex-col-reverse gap-2 border-t border-pf-border-soft pt-4 sm:col-span-2 sm:flex-row sm:justify-end"><Button variant="secondary" type="button" onClick={() => setOpen(false)} disabled={saving}>Cancelar</Button><Button type="submit" disabled={saving || !form.nombre.trim()}>{saving ? "Guardando…" : "Guardar cliente"}</Button></div>
         </form>
       </Modal>
+
+      <ReassignUserModal
+        open={Boolean(reassignTarget)}
+        title="Reasignar cliente"
+        users={teamMembers}
+        currentUserId={reassignTarget?.prestamista_id ?? null}
+        onClose={() => setReassignTarget(null)}
+        onConfirm={async (userId) => {
+          if (!reassignTarget) return;
+          await reasignarCliente(reassignTarget.id, userId);
+          await load();
+        }}
+      />
     </div>
   );
 }

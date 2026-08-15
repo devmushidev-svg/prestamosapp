@@ -1,5 +1,34 @@
 export type EstadoCliente = "activo" | "moroso" | "cancelado";
 
+/**
+ * 'admin' y 'prestamista' son los únicos roles con reglas definidas hoy.
+ * El check de la base ya acepta 'gerente' | 'cobrador' | 'supervisor' para
+ * cuando se agreguen sin migrar de nuevo; hasta entonces cualquier rol
+ * distinto de 'admin' recibe el mismo trato restringido que 'prestamista'.
+ */
+export type Rol = "admin" | "prestamista" | "gerente" | "cobrador" | "supervisor";
+
+export type Empresa = {
+  id: string;
+  nombre: string;
+  activo: boolean;
+  creado_en: string;
+};
+
+export type Profile = {
+  id: string;
+  empresa_id: string;
+  nombre: string;
+  apellido: string | null;
+  email: string;
+  telefono: string | null;
+  rol: Rol;
+  activo: boolean;
+  creado_por: string | null;
+  creado_en: string;
+  actualizado_en: string;
+};
+
 export type Cliente = {
   id: string;
   nombre: string;
@@ -15,6 +44,8 @@ export type Cliente = {
   notas: string | null;
   /** Posición manual en la ruta de cobro; null = sin ordenar. */
   orden_ruta: number | null;
+  /** Prestamista que administra a este cliente hoy; el admin puede reasignarlo. */
+  prestamista_id: string;
   creado_en: string;
 };
 
@@ -59,6 +90,8 @@ export type Prestamo = {
   saldo: number;
   estado: EstadoPrestamo;
   solicitud_id: string | null;
+  /** Prestamista que administra este préstamo hoy; el admin puede reasignarlo. */
+  prestamista_id: string;
   creado_en: string;
 };
 

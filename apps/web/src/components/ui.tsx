@@ -10,6 +10,7 @@ import {
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from "react";
+import { createPortal } from "react-dom";
 
 export function Card({
   className = "",
@@ -252,7 +253,10 @@ export function Modal({
   if (!open) return null;
   const widthCls =
     maxWidthClass ?? (wide ? "sm:max-w-3xl" : "sm:max-w-md");
-  return (
+  // Portal a document.body: así el modal queda fuera de <main> y de cualquier
+  // ancestro que anime opacity/transform (p. ej. pf-page-enter al cambiar de
+  // ruta), que de otro modo lo dejaría pintado detrás de la cabecera fija.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center p-0 sm:p-4">
       <button
         type="button"
@@ -282,6 +286,7 @@ export function Modal({
         </div>
         <div className="p-4">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
