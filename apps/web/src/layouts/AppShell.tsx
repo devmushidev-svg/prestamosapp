@@ -105,8 +105,8 @@ function NavIcon({ icon: Icon, className = "" }: { icon: LucideIcon; className?:
 
 function DesktopRibbonGroup({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="pf-ribbon-group flex min-w-0 flex-col pl-2 first:border-l-0 first:pl-0 sm:pl-3">
-      <div className="flex flex-row flex-wrap items-stretch gap-0.5 sm:gap-0">{children}</div>
+    <div className="pf-ribbon-group flex shrink-0 flex-col pl-2 first:border-l-0 first:pl-0 sm:pl-3">
+      <div className="flex flex-row flex-nowrap items-stretch gap-0.5 sm:gap-0">{children}</div>
       <p className="pf-ribbon-group-label mt-0.5 pt-0.5 text-center text-[10px] font-medium uppercase tracking-wide sm:text-[11px]">
         {title}
       </p>
