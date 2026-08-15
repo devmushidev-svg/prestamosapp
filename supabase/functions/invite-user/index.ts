@@ -39,6 +39,18 @@ function friendlyAuthError(message: string): string {
 }
 
 Deno.serve(async (req) => {
+  try {
+    return await handleInvite(req);
+  } catch (cause) {
+    // Cualquier excepción no prevista cae aquí: sin esto, Deno devuelve una
+    // página de error que no es JSON y el frontend pierde el mensaje real.
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    console.error("[invite-user] excepción no controlada:", detail);
+    return respond({ ok: false, message: "Error interno al procesar la invitación.", detail }, 500);
+  }
+});
+
+async function handleInvite(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS_HEADERS });
   if (req.method !== "POST") return respond({ ok: false, message: "Método no permitido." }, 405);
 
@@ -65,7 +77,8 @@ Deno.serve(async (req) => {
     .eq("id", callerData.user.id)
     .maybeSingle();
   if (callerProfileError || !callerProfile) {
-    return respond({ ok: false, message: "No pudimos verificar su perfil." }, 403);
+    console.error("[invite-user] no se pudo leer el perfil del que llama:", callerProfileError);
+    return respond({ ok: false, message: "No pudimos verificar su perfil.", detail: callerProfileError?.message ?? "perfil no encontrado" }, 403);
   }
   if (callerProfile.rol !== "admin" || !callerProfile.activo) {
     return respond({ ok: false, message: "Solo un administrador puede invitar usuarios." }, 403);
@@ -107,7 +120,14 @@ Deno.serve(async (req) => {
     data: { nombre, apellido: apellido || null },
   });
   if (inviteError || !invited?.user) {
-    return respond({ ok: false, message: friendlyAuthError(inviteError?.message ?? "") }, 400);
+    // Log completo en Supabase → Edge Functions → invite-user → Logs.
+    console.error("[invite-user] inviteUserByEmail falló:", JSON.stringify(inviteError));
+    return respond({
+      ok: false,
+      message: friendlyAuthError(inviteError?.message ?? ""),
+      // Detalle técnico real de Supabase; no se traduce para no perder información al depurar.
+      detail: inviteError?.message ?? "inviteUserByEmail no devolvió usuario",
+    }, (inviteError as { status?: number } | null)?.status ?? 400);
   }
 
   const { error: profileError } = await admin.from("profiles").upsert({
@@ -122,11 +142,16 @@ Deno.serve(async (req) => {
     creado_por: callerProfile.id,
   });
   if (profileError) {
+    console.error("[invite-user] no se pudo crear el profile:", JSON.stringify(profileError));
     // El usuario de Auth ya fue creado; se revierte para no dejar una cuenta
     // sin ficha (el admin puede reintentar con el mismo correo).
     await admin.auth.admin.deleteUser(invited.user.id).catch(() => undefined);
-    return respond({ ok: false, message: "No se pudo completar la invitación. Intente de nuevo." }, 500);
+    return respond({
+      ok: false,
+      message: "No se pudo completar la invitación. Intente de nuevo.",
+      detail: profileError.message,
+    }, 500);
   }
 
   return respond({ ok: true, userId: invited.user.id });
-});
+}

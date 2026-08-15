@@ -41,6 +41,37 @@ function friendlyMessage(cause: unknown, fallback: string): string {
   return fallback;
 }
 
+/**
+ * `supabase.functions.invoke` nunca pone en `error.message` el cuerpo que
+ * devuelve la función cuando responde con un código distinto de 2xx (queda
+ * en `error.context`, la Response cruda); hay que leerlo aparte para mostrar
+ * el motivo real (correo duplicado, no admin, falta el secreto, etc.).
+ * Siempre se deja el error crudo en consola para depurar sin adivinar.
+ */
+async function friendlyFunctionError(error: unknown, fallback: string): Promise<string> {
+  const context = (error as { context?: Response } | null)?.context;
+  let body: { message?: string; detail?: string } | null = null;
+  let rawText: string | null = null;
+  if (context instanceof Response) {
+    try {
+      body = await context.clone().json();
+    } catch {
+      try {
+        rawText = await context.clone().text();
+      } catch {
+        // La respuesta no tenía cuerpo legible.
+      }
+    }
+  }
+  // eslint-disable-next-line no-console
+  console.error("[invite-user] error crudo:", error, "status:", context?.status, "cuerpo:", body ?? rawText);
+  if (body?.message) {
+    return body.detail && body.detail !== body.message ? `${body.message} (${body.detail})` : body.message;
+  }
+  if (rawText) return `${fallback} (${rawText.slice(0, 200)})`;
+  return friendlyMessage(error, fallback);
+}
+
 export async function listUsers(): Promise<Profile[]> {
   const { data, error } = await supabase.from("profiles").select("*").order("nombre");
   if (error) throw new Error(friendlyMessage(error, "No pudimos cargar los usuarios."));
@@ -48,7 +79,7 @@ export async function listUsers(): Promise<Profile[]> {
 }
 
 export async function inviteUser(input: InviteUserInput): Promise<void> {
-  const { data, error } = await supabase.functions.invoke<{ ok: boolean; message?: string }>("invite-user", {
+  const { data, error } = await supabase.functions.invoke<{ ok: boolean; message?: string; detail?: string }>("invite-user", {
     body: {
       nombre: input.nombre.trim(),
       apellido: input.apellido.trim(),
@@ -58,8 +89,13 @@ export async function inviteUser(input: InviteUserInput): Promise<void> {
       redirectTo: `${window.location.origin}/restablecer-password`,
     },
   });
-  if (error) throw new Error(friendlyMessage(error, "No se pudo enviar la invitación. Intente de nuevo."));
-  if (!data?.ok) throw new Error(data?.message || "No se pudo enviar la invitación. Intente de nuevo.");
+  if (error) throw new Error(await friendlyFunctionError(error, "No se pudo enviar la invitación. Intente de nuevo."));
+  if (!data?.ok) {
+    // eslint-disable-next-line no-console
+    console.error("[invite-user] respondió ok:false ->", data);
+    const message = data?.message || "No se pudo enviar la invitación. Intente de nuevo.";
+    throw new Error(data?.detail && data.detail !== message ? `${message} (${data.detail})` : message);
+  }
 }
 
 export async function updateUser(id: string, input: UpdateUserInput): Promise<void> {
