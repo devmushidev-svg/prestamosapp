@@ -1,6 +1,7 @@
 const DEFAULT_NETWORK_TIMEOUT_MS = 8_000;
 const STORAGE_WRITE_TIMEOUT_MS = 45_000;
 const TRANSIENT_NETWORK_STATUSES = new Set([502, 503, 504, 520]);
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 
 function networkError(message: string, name: "AbortError" | "TimeoutError") {
   const error = new Error(message);
@@ -49,7 +50,10 @@ async function bufferResponse(response: Response): Promise<Response> {
   // describían el transporte original y no el Response recreado en memoria.
   headers.delete("content-encoding");
   headers.delete("content-length");
-  return new Response(body, {
+  // Chrome puede exponer un ReadableStream vacio incluso para respuestas que
+  // no admiten cuerpo. Un ArrayBuffer con 204/205/304 hace que Response lance
+  // TypeError aunque Supabase ya haya guardado correctamente el cambio.
+  return new Response(NULL_BODY_STATUSES.has(response.status) ? null : body, {
     headers,
     status: response.status,
     statusText: response.statusText,

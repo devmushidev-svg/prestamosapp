@@ -107,12 +107,19 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<vo
       telefono: input.telefono.trim() || null,
       rol: input.rol,
     })
-    .eq("id", id);
+    .eq("id", id)
+    .select("id")
+    .single();
   if (error) throw new Error(friendlyMessage(error, "No pudimos guardar los cambios del usuario."));
 }
 
 export async function setUserActive(id: string, activo: boolean): Promise<void> {
-  const { error } = await supabase.from("profiles").update({ activo }).eq("id", id);
+  const { error } = await supabase
+    .from("profiles")
+    .update({ activo })
+    .eq("id", id)
+    .select("id")
+    .single();
   if (error) {
     throw new Error(friendlyMessage(
       error,
