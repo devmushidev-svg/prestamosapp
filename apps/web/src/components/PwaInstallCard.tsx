@@ -18,6 +18,7 @@ export function PwaInstallCard() {
     serviceWorkerSupported,
     standalone,
     updateAvailable,
+    updating,
   } = usePwaInstall();
   const { prepared } = useOffline();
   const readyForOffline = appShellReady && prepared;
@@ -81,9 +82,9 @@ export function PwaInstallCard() {
               <p className="font-bold text-pf-text">Hay una actualización lista</p>
               <p className="mt-0.5 text-xs">Guarde cualquier formulario abierto y actualice para usar la versión nueva.</p>
             </div>
-            <Button type="button" variant="secondary" className="shrink-0" onClick={applyUpdate}>
-              <RefreshCw className="h-4 w-4" strokeWidth={2} aria-hidden />
-              Actualizar ahora
+            <Button type="button" variant="secondary" className="shrink-0" disabled={updating} onClick={applyUpdate}>
+              <RefreshCw className={`h-4 w-4 ${updating ? "animate-spin" : ""}`} strokeWidth={2} aria-hidden />
+              {updating ? "Actualizando…" : "Actualizar ahora"}
             </Button>
           </div>
         ) : readyForOffline ? (

@@ -38,6 +38,10 @@ export default defineConfig({
       workbox: {
         // SPA: rutas de cliente sirven index.html offline; los datos van directo a Supabase.
         clientsClaim: true,
+        // Rescata una sola vez instalaciones que quedaron esperando con el
+        // flujo anterior. El propio script guarda un marcador persistente;
+        // las actualizaciones posteriores vuelven al prompt normal.
+        importScripts: ["/pwa-rescue-20260815.js"],
         navigateFallback: "/index.html",
       },
     }),
