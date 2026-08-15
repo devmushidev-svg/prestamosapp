@@ -36,6 +36,8 @@ type RawLoanWithCustomer = Prestamo & {
 export const LOANS_CACHE_KEY = "loans";
 export const INSTALLMENTS_CACHE_KEY = "installments";
 const loanDetailCacheKey = (id: string) => `loan-detail:${id}`;
+const LOAN_WITH_CUSTOMER_SELECT =
+  "*,clientes:clientes!prestamos_cliente_empresa_fk(id,nombre,identidad,telefono,direccion)";
 
 function normalizeLoan(row: RawLoanWithCustomer): PrestamoConCliente {
   const relatedCustomer = Array.isArray(row.clientes) ? row.clientes[0] ?? null : row.clientes;
@@ -91,7 +93,9 @@ export async function downloadLoans(): Promise<PrestamoConCliente[]> {
     for (let from = 0; ; from += pageSize) {
       const { data, error } = await supabase
         .from("prestamos")
-        .select("*,clientes(id,nombre,identidad,telefono,direccion)")
+        // La constraint explícita evita ambigüedad si una base migrada todavía
+        // conserva también la relación simple cliente_id -> clientes.id.
+        .select(LOAN_WITH_CUSTOMER_SELECT)
         .order("creado_en", { ascending: false })
         .order("id", { ascending: true })
         .range(from, from + pageSize - 1);
@@ -167,7 +171,7 @@ export async function getLoanDetail(id: string): Promise<PrestamoDetalle> {
   try {
     return await readThroughCache(loanDetailCacheKey(resolvedId), async () => {
       const [loanResult, installmentsResult] = await Promise.all([
-        supabase.from("prestamos").select("*,clientes(id,nombre,identidad,telefono,direccion)").eq("id", resolvedId).single(),
+        supabase.from("prestamos").select(LOAN_WITH_CUSTOMER_SELECT).eq("id", resolvedId).single(),
         supabase.from("cuotas").select("*").eq("prestamo_id", resolvedId).order("numero"),
       ]);
       if (loanResult.error) throw loanResult.error;

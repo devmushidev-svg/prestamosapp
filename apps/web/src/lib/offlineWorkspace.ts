@@ -167,13 +167,18 @@ async function prepareOfflineWorkspaceAttempt(): Promise<void> {
 }
 
 export async function prepareOfflineWorkspace(): Promise<void> {
-  try {
-    await prepareOfflineWorkspaceAttempt();
-  } catch (error) {
-    if (!(error instanceof OfflineCacheChangedError)) throw error;
-    // Una lectura de pantalla pudo terminar mientras se descargaba la cartera.
-    // Repetir una vez evita publicar datos anteriores sin entrar en un bucle.
-    await prepareOfflineWorkspaceAttempt();
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await prepareOfflineWorkspaceAttempt();
+      return;
+    } catch (error) {
+      if (!(error instanceof OfflineCacheChangedError) || attempt === maxAttempts) throw error;
+      // Al iniciar sesión, el Panel puede terminar varias lecturas y actualizar
+      // su caché mientras se descarga la copia completa. Esperar brevemente y
+      // reintentar evita el falso fallo sin publicar sobre cambios pendientes.
+      await new Promise((resolve) => window.setTimeout(resolve, attempt * 200));
+    }
   }
 }
 

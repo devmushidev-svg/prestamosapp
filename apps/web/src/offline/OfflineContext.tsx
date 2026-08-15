@@ -48,6 +48,37 @@ function savedLastSync(userId?: string) {
   }
 }
 
+function syncFailureDetails(cause: unknown) {
+  const record = cause && typeof cause === "object"
+    ? cause as Record<string, unknown>
+    : null;
+  const message = cause instanceof Error
+    ? cause.message
+    : typeof record?.message === "string"
+      ? record.message
+      : "";
+  const code = typeof record?.code === "string" ? record.code : "";
+  const status = typeof record?.status === "number" || typeof record?.status === "string"
+    ? String(record.status)
+    : "";
+  return { code, message, status };
+}
+
+function safeSyncFailureMessage(cause: unknown, stage: string) {
+  const { code, status } = syncFailureDetails(cause);
+  if (code === "PGRST201" || status === "300") {
+    return "La base de datos necesita actualizar una relación antes de descargar la cartera (PGRST201).";
+  }
+  if (code === "42501" || status === "403") {
+    return "Su cuenta no tiene permiso para descargar una parte de la cartera.";
+  }
+  if (status === "401") {
+    return "La sesión necesita validarse otra vez. Inicie sesión con Internet.";
+  }
+  const diagnostic = code || status;
+  return `No se pudo completar ${stage}.${diagnostic ? ` Código: ${diagnostic}.` : ""}`;
+}
+
 export function OfflineProvider({ children }: { children: ReactNode }) {
   const { session, user } = useAuth();
   const userId = user?.id ?? null;
@@ -95,6 +126,7 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
       setSyncing(true);
       setPreparing(true);
       setError("");
+      let stage = "la validación de la sesión";
       try {
         const authResult = await withOnlineDeadline(supabase.auth.refreshSession());
         if (authResult.error || !authResult.data.session) {
@@ -109,6 +141,7 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
         }
         setOnline(true);
         setPreferOfflineCache(false);
+        stage = "el envío de cambios pendientes";
         const result = await syncOfflineOperations();
         if (result.attention > 0 || result.pending > 0) {
           setPrepared(await isOfflineWorkspacePrepared().catch(() => false));
@@ -120,7 +153,9 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
           }
           return;
         }
+        stage = "la descarga de la cartera offline";
         await prepareOfflineWorkspace();
+        stage = "la verificación de la copia offline";
         if (!(await isOfflineWorkspacePrepared())) {
           throw new Error("La copia local quedó incompleta. Vuelva a pulsar Preparar datos offline.");
         }
@@ -137,7 +172,18 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
           setOnline(false);
           setPreferOfflineCache(true);
         }
-        setError(cause instanceof Error ? cause.message : "No se pudo completar la sincronización.");
+        const details = syncFailureDetails(cause);
+        // No incluye filas, credenciales ni tokens; deja etapa y código para
+        // diagnosticar futuros fallos sin volver a ocultarlos tras un genérico.
+        console.error("[offline-sync] failed", {
+          stage,
+          code: details.code || undefined,
+          status: details.status || undefined,
+          message: details.message || undefined,
+        });
+        setError(cause instanceof Error && cause.message
+          ? cause.message
+          : safeSyncFailureMessage(cause, stage));
       } finally {
         await refreshCounts().catch(() => undefined);
         setSyncing(false);
