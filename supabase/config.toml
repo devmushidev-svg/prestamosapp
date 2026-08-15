@@ -2,6 +2,8 @@
 #   supabase functions deploy invite-user --project-ref jblpeajvgqtsbnghbfch
 # El secreto se configura aparte (nunca en este archivo ni en el repo):
 #   supabase secrets set SUPABASE_SERVICE_ROLE_KEY=... --project-ref jblpeajvgqtsbnghbfch
+# La URL publica tambien es obligatoria para los enlaces de invitacion:
+#   supabase secrets set APP_URL=https://su-app.vercel.app --project-ref jblpeajvgqtsbnghbfch
 project_id = "jblpeajvgqtsbnghbfch"
 
 [functions.invite-user]

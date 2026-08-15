@@ -66,7 +66,19 @@ async function executeOperation(operation: OfflineOperation): Promise<void> {
   switch (operation.type) {
     case "business.upsert": {
       const { row } = operation.payload as BusinessUpsertPayload;
-      const result = await supabase.from("configuracion_prestamista").upsert(row, { onConflict: "id" });
+      // En el esquema multiempresa `empresa_id` tiene un default basado en la
+      // sesión. Eso también migra operaciones antiguas que aún no lo incluían.
+      let result = await supabase.from("configuracion_prestamista").upsert(row, { onConflict: "empresa_id" });
+      if (result.error && (
+        result.error.code === "PGRST204"
+        || result.error.code === "42703"
+        || result.error.code === "42P10"
+        || result.error.message?.includes("empresa_id")
+      )) {
+        const legacyRow = { ...row };
+        delete legacyRow.empresa_id;
+        result = await supabase.from("configuracion_prestamista").upsert(legacyRow, { onConflict: "id" });
+      }
       if (result.error) throw result.error;
       return;
     }

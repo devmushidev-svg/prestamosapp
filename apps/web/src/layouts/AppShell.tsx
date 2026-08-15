@@ -59,11 +59,11 @@ const RIBBON: Record<TabId, RibbonGroupDef[]> = {
   empresa: [
     {
       title: "Negocio",
-      items: [{ to: "/configuracion", label: "Datos del prestamista", icon: Settings2 }],
+      items: [{ to: "/configuracion", label: "Datos de la empresa", icon: Settings2 }],
     },
     {
       title: "Equipo",
-      items: [{ to: "/configuracion/usuarios", label: "Usuarios", icon: UserCog, end: true }],
+      items: [{ to: "/configuracion/usuarios", label: "Usuarios de la empresa", icon: UserCog, end: true }],
     },
   ],
   ajustes: [

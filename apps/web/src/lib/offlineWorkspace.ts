@@ -35,7 +35,9 @@ import {
 import type { Cliente, Cuota, Gestion } from "../types";
 
 export const OFFLINE_WORKSPACE_MANIFEST_CACHE_KEY = "offline-workspace-manifest";
-const OFFLINE_WORKSPACE_FORMAT_VERSION = 2;
+// v3 incorpora la configuración del negocio identificada por empresa.
+// Obliga a preparar otra vez la copia para no reutilizar el antiguo singleton.
+const OFFLINE_WORKSPACE_FORMAT_VERSION = 3;
 
 type GestionesSnapshot = { rows: Gestion[]; migracionPendiente: boolean };
 

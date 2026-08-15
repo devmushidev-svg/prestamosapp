@@ -150,7 +150,15 @@ export async function uploadFacadePhoto(
   if (file.size > 10 * 1024 * 1024) throw new Error("La foto no puede superar 10 MB.");
 
   const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
-  const path = `${clienteId}/${crypto.randomUUID()}.${extension}`;
+  const companyResult = await supabase
+    .from("clientes")
+    .select("empresa_id")
+    .eq("id", clienteId)
+    .single();
+  if (companyResult.error || !companyResult.data?.empresa_id) {
+    throw new Error("No pudimos verificar la empresa propietaria de este cliente.");
+  }
+  const path = `${companyResult.data.empresa_id}/${clienteId}/${crypto.randomUUID()}.${extension}`;
   const uploaded = await supabase.storage.from(FACHADAS_BUCKET).upload(path, file, {
     cacheControl: "3600",
     contentType: file.type,

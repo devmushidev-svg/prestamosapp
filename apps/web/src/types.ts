@@ -50,6 +50,8 @@ export type Cliente = {
 };
 
 export type ConfiguracionPrestamista = {
+  /** Empresa propietaria de esta configuración; nunca se comparte entre empresas. */
+  empresa_id: string;
   id: number;
   nombre_negocio: string;
   nombre_propietario: string;

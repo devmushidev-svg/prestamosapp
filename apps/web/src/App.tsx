@@ -38,8 +38,8 @@ function RouteFallback() {
 
 function Protected({ children }: { children: ReactNode }) {
   const { user, loading, logout } = useAuth();
-  const { status: profileStatus } = useProfile();
-  if (loading) {
+  const { status: profileStatus, error: profileError, reload: reloadProfile } = useProfile();
+  if (loading || (user && profileStatus === "loading")) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-pf-surface text-pf-muted">
         Cargando…
@@ -53,9 +53,49 @@ function Protected({ children }: { children: ReactNode }) {
         <Card className="max-w-md p-6 text-center">
           <p className="font-bold text-pf-text">Su cuenta está desactivada</p>
           <p className="mt-2 text-sm text-pf-muted">
-            Contacte al administrador de su empresa para recuperar el acceso.
+            Contacte a la cuenta maestra de su empresa para recuperar el acceso.
           </p>
           <Button type="button" className="mt-4" onClick={() => void logout()}>Salir</Button>
+        </Card>
+      </div>
+    );
+  }
+  if (profileStatus === "company_inactive") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-pf-surface px-4">
+        <Card className="max-w-md p-6 text-center">
+          <p className="font-bold text-pf-text">La empresa está desactivada</p>
+          <p className="mt-2 text-sm text-pf-muted">
+            El acceso y la sincronización están suspendidos. Contacte al responsable de la plataforma.
+          </p>
+          <Button type="button" className="mt-4" onClick={() => void logout()}>Salir</Button>
+        </Card>
+      </div>
+    );
+  }
+  if (profileStatus === "unassigned") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-pf-surface px-4">
+        <Card className="max-w-md p-6 text-center">
+          <p className="font-bold text-pf-text">Cuenta no asignada a una empresa</p>
+          <p className="mt-2 text-sm text-pf-muted">
+            {profileError || "La cuenta maestra debe invitarle desde la empresa a la que pertenece."}
+          </p>
+          <Button type="button" className="mt-4" onClick={() => void logout()}>Salir</Button>
+        </Card>
+      </div>
+    );
+  }
+  if (profileStatus === "error") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-pf-surface px-4">
+        <Card className="max-w-md p-6 text-center">
+          <p className="font-bold text-pf-text">No pudimos verificar su cuenta</p>
+          <p className="mt-2 text-sm text-pf-muted">{profileError}</p>
+          <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-center">
+            <Button type="button" variant="secondary" onClick={() => void logout()}>Salir</Button>
+            <Button type="button" onClick={() => void reloadProfile()}>Reintentar</Button>
+          </div>
         </Card>
       </div>
     );
@@ -63,7 +103,8 @@ function Protected({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-function RequireAdmin({ children }: { children: ReactNode }) {
+function RequireAdmin({ children, showAccessMessage = false }: { children: ReactNode; showAccessMessage?: boolean }) {
+  const { logout } = useAuth();
   const { status, isAdmin } = useProfile();
   if (status === "loading") {
     return (
@@ -72,7 +113,22 @@ function RequireAdmin({ children }: { children: ReactNode }) {
       </div>
     );
   }
-  if (!isAdmin) return <Navigate to="/" replace />;
+  if (!isAdmin) {
+    if (showAccessMessage) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-pf-surface px-4">
+          <Card className="max-w-md p-6 text-center">
+            <p className="font-bold text-pf-text">Configuración reservada</p>
+            <p className="mt-2 text-sm text-pf-muted">
+              Solo la cuenta maestra puede configurar la empresa. Pídale que complete este paso antes de ingresar.
+            </p>
+            <Button type="button" className="mt-4" onClick={() => void logout()}>Salir</Button>
+          </Card>
+        </div>
+      );
+    }
+    return <Navigate to="/" replace />;
+  }
   return <>{children}</>;
 }
 
@@ -85,9 +141,11 @@ export default function App() {
         path="/configuracion/inicial"
         element={
           <Protected>
-            <Suspense fallback={<RouteFallback />}>
-              <BusinessSetupPage />
-            </Suspense>
+            <RequireAdmin showAccessMessage>
+              <Suspense fallback={<RouteFallback />}>
+                <BusinessSetupPage />
+              </Suspense>
+            </RequireAdmin>
           </Protected>
         }
       />

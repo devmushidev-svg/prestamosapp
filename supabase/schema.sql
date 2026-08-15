@@ -472,28 +472,46 @@ create index if not exists idx_profiles_empresa on profiles (empresa_id);
 do $$
 declare
   v_empresa_id uuid;
+  v_master_id uuid;
 begin
-  if not exists (select 1 from empresas) then
-    insert into empresas (nombre)
-    values (coalesce(
-      nullif(btrim((select nombre_negocio from configuracion_prestamista where id = 1)), ''),
-      'Mi Empresa'
-    ))
-    returning id into v_empresa_id;
-  else
-    select id into v_empresa_id from empresas order by creado_en limit 1;
-  end if;
+  -- Este bloque es exclusivamente una migracion del MVP de una sola empresa.
+  -- Una vez que existe cualquier perfil, un usuario de Auth sin ficha NO se
+  -- adopta silenciosamente por la primera empresa: las empresas nuevas se dan
+  -- de alta con `provisionar_empresa_master`, usando service_role.
+  if not exists (select 1 from profiles) then
+    select u.id
+    into v_master_id
+    from auth.users u
+    order by u.created_at, u.id
+    limit 1;
 
-  insert into profiles (id, empresa_id, nombre, email, rol, activo)
-  select
-    u.id,
-    v_empresa_id,
-    coalesce(nullif(btrim(split_part(u.email, '@', 1)), ''), 'Administrador'),
-    u.email,
-    'admin',
-    true
-  from auth.users u
-  where not exists (select 1 from profiles p where p.id = u.id);
+    if v_master_id is not null then
+      if not exists (select 1 from empresas) then
+        insert into empresas (nombre)
+        values (coalesce(
+          nullif(btrim((select nombre_negocio from configuracion_prestamista where id = 1)), ''),
+          'Mi Empresa'
+        ))
+        returning id into v_empresa_id;
+      else
+        select id into v_empresa_id from empresas order by creado_en, id limit 1;
+      end if;
+
+      insert into profiles (id, empresa_id, nombre, email, rol, activo)
+      select
+        u.id,
+        v_empresa_id,
+        coalesce(nullif(btrim(split_part(u.email, '@', 1)), ''), 'Administrador'),
+        lower(u.email),
+        case when u.id = v_master_id then 'admin' else 'prestamista' end,
+        true
+      from auth.users u;
+
+      update profiles
+      set creado_por = v_master_id
+      where empresa_id = v_empresa_id and id <> v_master_id and creado_por is null;
+    end if;
+  end if;
 end $$;
 
 -- Funciones auxiliares "security definer": leen `profiles` sin pasar por su
@@ -517,7 +535,10 @@ stable
 set search_path = ''
 as $$
   select exists (
-    select 1 from public.profiles where id = auth.uid() and rol = 'admin' and activo
+    select 1
+    from public.profiles p
+    join public.empresas e on e.id = p.empresa_id
+    where p.id = auth.uid() and p.rol = 'admin' and p.activo and e.activo
   );
 $$;
 
@@ -528,7 +549,12 @@ security definer
 stable
 set search_path = ''
 as $$
-  select coalesce((select activo from public.profiles where id = auth.uid()), false);
+  select exists (
+    select 1
+    from public.profiles p
+    join public.empresas e on e.id = p.empresa_id
+    where p.id = auth.uid() and p.activo and e.activo
+  );
 $$;
 
 revoke all on function public.current_empresa_id() from public, anon;
@@ -538,8 +564,286 @@ grant execute on function public.is_admin() to authenticated;
 revoke all on function public.is_active_profile() from public, anon;
 grant execute on function public.is_active_profile() to authenticated;
 
--- Un usuario nunca puede cambiar su propio rol/estado/empresa (ni siquiera
--- siendo admin) y una empresa nunca se queda sin al menos un admin activo.
+-- Migra instalaciones que llegaron a tener varios administradores por el
+-- bootstrap anterior. El perfil admin mas antiguo queda como la unica cuenta
+-- maestra; los demas conservan acceso como prestamistas. Si una empresa tenia
+-- perfiles pero ningun admin, se promueve deterministicamente el mas antiguo.
+with admins_ordenados as (
+  select
+    id,
+    row_number() over (partition by empresa_id order by creado_en, id) as posicion
+  from profiles
+  where rol = 'admin'
+)
+update profiles p
+set activo = true
+from admins_ordenados a
+where p.id = a.id and a.posicion = 1 and not p.activo;
+
+with admins_ordenados as (
+  select
+    id,
+    row_number() over (partition by empresa_id order by creado_en, id) as posicion
+  from profiles
+  where rol = 'admin'
+)
+update profiles p
+set rol = 'prestamista'
+from admins_ordenados a
+where p.id = a.id and a.posicion > 1;
+
+with candidatos as (
+  select
+    p.id,
+    row_number() over (partition by p.empresa_id order by p.creado_en, p.id) as posicion
+  from profiles p
+  where not exists (
+    select 1 from profiles master
+    where master.empresa_id = p.empresa_id and master.rol = 'admin'
+  )
+)
+update profiles p
+set rol = 'admin', activo = true
+from candidatos c
+where p.id = c.id and c.posicion = 1;
+
+do $$
+declare
+  v_empresas_sin_master text;
+begin
+  select string_agg(e.id::text, ', ' order by e.id::text)
+  into v_empresas_sin_master
+  from empresas e
+  where not exists (select 1 from profiles p where p.empresa_id = e.id and p.rol = 'admin' and p.activo);
+
+  if v_empresas_sin_master is not null then
+    raise exception 'Hay empresa(s) sin una cuenta maestra y sin perfil que promover: %', v_empresas_sin_master;
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'profiles_admin_siempre_activo'
+      and conrelid = 'public.profiles'::regclass
+  ) then
+    alter table profiles add constraint profiles_admin_siempre_activo
+      check (rol <> 'admin' or activo);
+  end if;
+end $$;
+
+create unique index if not exists profiles_un_admin_por_empresa
+  on profiles (empresa_id) where rol = 'admin';
+create unique index if not exists profiles_id_empresa_unique
+  on profiles (id, empresa_id);
+create unique index if not exists profiles_email_normalizado_unique
+  on profiles (lower(email));
+
+-- La configuracion deja de ser un singleton global. `id = 1` se conserva
+-- para que clientes antiguos sigan leyendo la misma forma de fila, mientras
+-- `empresa_id` pasa a ser la clave primaria y frontera real de aislamiento.
+alter table configuracion_prestamista add column if not exists empresa_id uuid;
+
+do $$
+declare
+  v_empresa_id uuid;
+begin
+  if exists (select 1 from configuracion_prestamista where empresa_id is null) then
+    select id into v_empresa_id from empresas order by creado_en, id limit 1;
+    if v_empresa_id is null then
+      raise exception 'No se puede migrar la configuracion sin una empresa existente';
+    end if;
+    update configuracion_prestamista set empresa_id = v_empresa_id where empresa_id is null;
+  end if;
+end $$;
+
+alter table configuracion_prestamista
+  alter column empresa_id set default public.current_empresa_id();
+alter table configuracion_prestamista alter column empresa_id set not null;
+
+do $$
+declare
+  v_pkey_name text;
+begin
+  select conname into v_pkey_name
+  from pg_constraint
+  where conrelid = 'public.configuracion_prestamista'::regclass and contype = 'p';
+
+  if v_pkey_name is not null and not exists (
+    select 1
+    from pg_constraint c
+    join pg_attribute a
+      on a.attrelid = c.conrelid and a.attname = 'empresa_id'
+    where c.conrelid = 'public.configuracion_prestamista'::regclass
+      and c.contype = 'p'
+      and cardinality(c.conkey) = 1
+      and c.conkey[1] = a.attnum
+  ) then
+    execute format('alter table public.configuracion_prestamista drop constraint %I', v_pkey_name);
+    v_pkey_name := null;
+  end if;
+
+  if v_pkey_name is null then
+    alter table configuracion_prestamista
+      add constraint configuracion_prestamista_pkey primary key (empresa_id);
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'configuracion_prestamista_empresa_fk'
+      and conrelid = 'public.configuracion_prestamista'::regclass
+  ) then
+    alter table configuracion_prestamista
+      add constraint configuracion_prestamista_empresa_fk
+      foreign key (empresa_id) references empresas(id) on delete cascade;
+  end if;
+end $$;
+
+-- Comprobacion diferida: permite crear empresa + master en una misma
+-- transaccion, pero impide confirmar una empresa sin exactamente un admin
+-- activo. La unicidad parcial de arriba cubre el limite superior.
+create or replace function public.assert_empresa_tiene_master(p_empresa_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if exists (select 1 from public.empresas e where e.id = p_empresa_id)
+    and not exists (
+      select 1 from public.profiles p
+      where p.empresa_id = p_empresa_id and p.rol = 'admin' and p.activo
+    ) then
+    raise exception using
+      message = 'Cada empresa debe conservar exactamente una cuenta maestra activa.',
+      errcode = '23514';
+  end if;
+end;
+$$;
+
+create or replace function public.validar_empresa_master_profiles()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_op = 'DELETE' then
+    perform public.assert_empresa_tiene_master(old.empresa_id);
+  elsif tg_op = 'INSERT' then
+    perform public.assert_empresa_tiene_master(new.empresa_id);
+  else
+    perform public.assert_empresa_tiene_master(old.empresa_id);
+    if new.empresa_id is distinct from old.empresa_id then
+      perform public.assert_empresa_tiene_master(new.empresa_id);
+    end if;
+  end if;
+  return null;
+end;
+$$;
+
+create or replace function public.validar_empresa_master_empresas()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  perform public.assert_empresa_tiene_master(new.id);
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_profiles_empresa_master on profiles;
+create constraint trigger trg_profiles_empresa_master
+  after insert or update or delete on profiles
+  deferrable initially deferred
+  for each row execute function public.validar_empresa_master_profiles();
+
+drop trigger if exists trg_empresas_master on empresas;
+create constraint trigger trg_empresas_master
+  after insert or update on empresas
+  deferrable initially deferred
+  for each row execute function public.validar_empresa_master_empresas();
+
+revoke all on function public.assert_empresa_tiene_master(uuid) from public, anon, authenticated;
+revoke all on function public.validar_empresa_master_profiles() from public, anon, authenticated;
+revoke all on function public.validar_empresa_master_empresas() from public, anon, authenticated;
+
+-- Alta operativa de una empresa y su unica cuenta maestra. Esta funcion NO
+-- crea auth.users: el operador crea/invita primero el usuario con Admin Auth y
+-- luego, usando service_role desde una Edge Function o proceso privado, llama
+-- este RPC con su UUID. Empresa y profile se confirman atomicamente.
+create or replace function public.provisionar_empresa_master(
+  p_user_id uuid,
+  p_empresa_nombre text,
+  p_nombre text,
+  p_apellido text default null,
+  p_telefono text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_empresa_id uuid;
+  v_email text;
+begin
+  if p_user_id is null then
+    raise exception using message = 'El usuario de Auth es obligatorio.', errcode = '23502';
+  end if;
+  if nullif(btrim(p_empresa_nombre), '') is null then
+    raise exception using message = 'El nombre de la empresa es obligatorio.', errcode = '23514';
+  end if;
+  if nullif(btrim(p_nombre), '') is null then
+    raise exception using message = 'El nombre de la cuenta maestra es obligatorio.', errcode = '23514';
+  end if;
+
+  select lower(u.email)
+  into v_email
+  from auth.users u
+  where u.id = p_user_id
+  for update;
+
+  if not found or nullif(btrim(v_email), '') is null then
+    raise exception using message = 'El usuario de Auth no existe o no tiene correo.', errcode = '23503';
+  end if;
+  if exists (select 1 from public.profiles p where p.id = p_user_id) then
+    raise exception using message = 'El usuario ya pertenece a una empresa.', errcode = '23505';
+  end if;
+
+  insert into public.empresas (nombre)
+  values (btrim(p_empresa_nombre))
+  returning id into v_empresa_id;
+
+  insert into public.profiles (
+    id, empresa_id, nombre, apellido, email, telefono, rol, activo, creado_por
+  ) values (
+    p_user_id,
+    v_empresa_id,
+    btrim(p_nombre),
+    nullif(btrim(p_apellido), ''),
+    v_email,
+    nullif(btrim(p_telefono), ''),
+    'admin',
+    true,
+    null
+  );
+
+  return v_empresa_id;
+end;
+$$;
+
+revoke all on function public.provisionar_empresa_master(uuid, text, text, text, text)
+  from public, anon, authenticated;
+grant execute on function public.provisionar_empresa_master(uuid, text, text, text, text)
+  to service_role;
+
+-- El correo queda ligado a Auth y ningun usuario puede cambiar su propio
+-- rol/estado/empresa. La cuenta maestra tampoco puede desactivarse ni
+-- transferirse mediante un update ordinario.
 create or replace function public.profiles_guard_self_changes()
 returns trigger
 language plpgsql
@@ -547,19 +851,22 @@ security definer
 set search_path = ''
 as $$
 begin
+  if new.id is distinct from old.id
+    or new.email is distinct from old.email
+    or new.empresa_id is distinct from old.empresa_id
+    or new.creado_por is distinct from old.creado_por
+    or new.creado_en is distinct from old.creado_en then
+    raise exception using message = 'La identidad, empresa y datos de alta del perfil son inmutables.', errcode = '42501';
+  end if;
   if new.id = auth.uid() and (
     new.rol is distinct from old.rol
     or new.activo is distinct from old.activo
-    or new.empresa_id is distinct from old.empresa_id
   ) then
     raise exception using message = 'No puede modificar su propio rol, estado o empresa.', errcode = '42501';
   end if;
   if old.rol = 'admin' and (new.rol is distinct from old.rol or (new.activo is distinct from old.activo and not new.activo))
-    and not exists (
-      select 1 from public.profiles p
-      where p.empresa_id = old.empresa_id and p.rol = 'admin' and p.activo and p.id <> old.id
-    ) then
-    raise exception using message = 'Debe existir al menos un administrador activo en la empresa.', errcode = '23514';
+  then
+    raise exception using message = 'La cuenta maestra de la empresa no se puede desactivar ni cambiar de rol.', errcode = '23514';
   end if;
   new.actualizado_en := now();
   return new;
@@ -584,13 +891,17 @@ drop policy if exists "profiles_update" on profiles;
 create policy "profiles_select" on profiles
   for select to authenticated
   using (id = auth.uid() or (empresa_id = public.current_empresa_id() and public.is_admin()));
-create policy "profiles_insert_admin" on profiles
-  for insert to authenticated
-  with check (empresa_id = public.current_empresa_id() and public.is_admin());
+-- No hay politica INSERT para authenticated. Las fichas se crean unicamente
+-- desde las funciones privadas que usan service_role.
 create policy "profiles_update" on profiles
   for update to authenticated
-  using (id = auth.uid() or (empresa_id = public.current_empresa_id() and public.is_admin()))
-  with check (id = auth.uid() or (empresa_id = public.current_empresa_id() and public.is_admin()));
+  using ((id = auth.uid() and public.is_active_profile()) or (empresa_id = public.current_empresa_id() and public.is_admin()))
+  with check ((id = auth.uid() and public.is_active_profile()) or (empresa_id = public.current_empresa_id() and public.is_admin()));
+
+revoke all on table profiles from anon;
+revoke insert, delete, truncate, references, trigger on table profiles from authenticated;
+grant select, update on table profiles to authenticated;
+grant select, insert, update, delete on table profiles to service_role;
 
 -- Cartera: empresa_id aísla entre empresas; prestamista_id reparte la cartera
 -- dentro de la empresa (admin ve y gestiona todo; el resto solo lo suyo).
@@ -635,6 +946,11 @@ alter table prestamos alter column creado_por set default auth.uid();
 alter table pagos alter column registrado_por set default auth.uid();
 alter table gestiones alter column creado_por set default auth.uid();
 
+-- Claves compuestas: no basta con que el prestamista/cliente exista; debe
+-- pertenecer a la misma empresa de la fila que lo referencia.
+create unique index if not exists clientes_id_empresa_unique
+  on clientes (id, empresa_id);
+
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'clientes_empresa_fk' and conrelid = 'public.clientes'::regclass) then
@@ -648,6 +964,132 @@ begin
   end if;
   if not exists (select 1 from pg_constraint where conname = 'prestamos_prestamista_fk' and conrelid = 'public.prestamos'::regclass) then
     alter table prestamos add constraint prestamos_prestamista_fk foreign key (prestamista_id) references profiles(id);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'clientes_prestamista_empresa_fk' and conrelid = 'public.clientes'::regclass) then
+    alter table clientes add constraint clientes_prestamista_empresa_fk
+      foreign key (prestamista_id, empresa_id) references profiles(id, empresa_id);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'clientes_creado_por_empresa_fk' and conrelid = 'public.clientes'::regclass) then
+    alter table clientes add constraint clientes_creado_por_empresa_fk
+      foreign key (creado_por, empresa_id) references profiles(id, empresa_id);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'prestamos_cliente_empresa_fk' and conrelid = 'public.prestamos'::regclass) then
+    alter table prestamos add constraint prestamos_cliente_empresa_fk
+      foreign key (cliente_id, empresa_id) references clientes(id, empresa_id);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'prestamos_prestamista_empresa_fk' and conrelid = 'public.prestamos'::regclass) then
+    alter table prestamos add constraint prestamos_prestamista_empresa_fk
+      foreign key (prestamista_id, empresa_id) references profiles(id, empresa_id);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'prestamos_creado_por_empresa_fk' and conrelid = 'public.prestamos'::regclass) then
+    alter table prestamos add constraint prestamos_creado_por_empresa_fk
+      foreign key (creado_por, empresa_id) references profiles(id, empresa_id);
+  end if;
+end $$;
+
+-- `pagos` y `gestiones` derivan la empresa desde el prestamo/cliente. Estos
+-- triggers evitan falsificar la autoria con un perfil de otra empresa sin
+-- duplicar empresa_id en las tablas historicas.
+create or replace function public.validar_autoria_pago()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.registrado_por is not null and not exists (
+    select 1
+    from public.prestamos prestamo
+    join public.profiles autor
+      on autor.id = new.registrado_por
+      and autor.empresa_id = prestamo.empresa_id
+    where prestamo.id = new.prestamo_id
+  ) then
+    raise exception using
+      message = 'Quien registra el pago debe pertenecer a la empresa del prestamo.',
+      errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.validar_autoria_gestion()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.creado_por is not null and not exists (
+    select 1
+    from public.clientes cliente
+    join public.profiles autor
+      on autor.id = new.creado_por
+      and autor.empresa_id = cliente.empresa_id
+    where cliente.id = new.cliente_id
+  ) then
+    raise exception using
+      message = 'Quien registra la gestion debe pertenecer a la empresa del cliente.',
+      errcode = '23514';
+  end if;
+
+  if new.pago_id is not null and not exists (
+    select 1
+    from public.pagos pago
+    join public.prestamos prestamo on prestamo.id = pago.prestamo_id
+    where pago.id = new.pago_id and prestamo.cliente_id = new.cliente_id
+  ) then
+    raise exception using
+      message = 'El pago enlazado no pertenece al cliente de la gestion.',
+      errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_pagos_validar_autoria on pagos;
+create trigger trg_pagos_validar_autoria
+  before insert or update of prestamo_id, registrado_por on pagos
+  for each row execute function public.validar_autoria_pago();
+
+drop trigger if exists trg_gestiones_validar_autoria on gestiones;
+create trigger trg_gestiones_validar_autoria
+  before insert or update of cliente_id, creado_por, pago_id on gestiones
+  for each row execute function public.validar_autoria_gestion();
+
+revoke all on function public.validar_autoria_pago() from public, anon, authenticated;
+revoke all on function public.validar_autoria_gestion() from public, anon, authenticated;
+
+do $$
+begin
+  if exists (
+    select 1
+    from pagos pago
+    join prestamos prestamo on prestamo.id = pago.prestamo_id
+    join profiles autor on autor.id = pago.registrado_por
+    where autor.empresa_id <> prestamo.empresa_id
+  ) then
+    raise exception 'Existen pagos cuya autoria pertenece a otra empresa';
+  end if;
+
+  if exists (
+    select 1
+    from gestiones gestion
+    join clientes cliente on cliente.id = gestion.cliente_id
+    join profiles autor on autor.id = gestion.creado_por
+    where autor.empresa_id <> cliente.empresa_id
+  ) then
+    raise exception 'Existen gestiones cuya autoria pertenece a otra empresa';
+  end if;
+
+  if exists (
+    select 1
+    from gestiones gestion
+    join pagos pago on pago.id = gestion.pago_id
+    join prestamos prestamo on prestamo.id = pago.prestamo_id
+    where gestion.pago_id is not null and prestamo.cliente_id <> gestion.cliente_id
+  ) then
+    raise exception 'Existen gestiones enlazadas a pagos de otro cliente';
   end if;
 end $$;
 
@@ -677,7 +1119,7 @@ create policy "clientes_insert" on clientes for insert to authenticated
   with check (empresa_id = public.current_empresa_id() and public.is_active_profile() and (public.is_admin() or prestamista_id = auth.uid()));
 create policy "clientes_update" on clientes for update to authenticated
   using (empresa_id = public.current_empresa_id() and public.is_active_profile() and (public.is_admin() or prestamista_id = auth.uid()))
-  with check (empresa_id = public.current_empresa_id() and (public.is_admin() or prestamista_id = auth.uid()));
+  with check (empresa_id = public.current_empresa_id() and public.is_active_profile() and (public.is_admin() or prestamista_id = auth.uid()));
 
 drop policy if exists "autenticados" on prestamos;
 drop policy if exists "prestamos_select" on prestamos;
@@ -689,9 +1131,10 @@ create policy "prestamos_insert" on prestamos for insert to authenticated
   with check (empresa_id = public.current_empresa_id() and public.is_active_profile() and (public.is_admin() or prestamista_id = auth.uid()));
 create policy "prestamos_update" on prestamos for update to authenticated
   using (empresa_id = public.current_empresa_id() and public.is_active_profile() and (public.is_admin() or prestamista_id = auth.uid()))
-  with check (empresa_id = public.current_empresa_id() and (public.is_admin() or prestamista_id = auth.uid()));
+  with check (empresa_id = public.current_empresa_id() and public.is_active_profile() and (public.is_admin() or prestamista_id = auth.uid()));
 
 drop policy if exists "autenticados" on cuotas;
+drop policy if exists "cuotas_all" on cuotas;
 create policy "cuotas_all" on cuotas for all to authenticated
   using (exists (
     select 1 from public.prestamos p
@@ -705,6 +1148,7 @@ create policy "cuotas_all" on cuotas for all to authenticated
   ));
 
 drop policy if exists "autenticados" on pagos;
+drop policy if exists "pagos_all" on pagos;
 create policy "pagos_all" on pagos for all to authenticated
   using (exists (
     select 1 from public.prestamos p
@@ -718,6 +1162,7 @@ create policy "pagos_all" on pagos for all to authenticated
   ));
 
 drop policy if exists "autenticados" on pago_aplicaciones;
+drop policy if exists "pago_aplicaciones_all" on pago_aplicaciones;
 create policy "pago_aplicaciones_all" on pago_aplicaciones for all to authenticated
   using (exists (
     select 1 from public.prestamos p
@@ -731,6 +1176,7 @@ create policy "pago_aplicaciones_all" on pago_aplicaciones for all to authentica
   ));
 
 drop policy if exists "autenticados" on gestiones;
+drop policy if exists "gestiones_all" on gestiones;
 create policy "gestiones_all" on gestiones for all to authenticated
   using (exists (
     select 1 from public.clientes c
@@ -750,11 +1196,15 @@ drop policy if exists "configuracion_leer" on configuracion_prestamista;
 drop policy if exists "configuracion_insertar" on configuracion_prestamista;
 drop policy if exists "configuracion_actualizar" on configuracion_prestamista;
 create policy "configuracion_leer" on configuracion_prestamista
-  for select to authenticated using (id = 1);
+  for select to authenticated
+  using (empresa_id = public.current_empresa_id() and public.is_active_profile());
 create policy "configuracion_insertar" on configuracion_prestamista
-  for insert to authenticated with check (id = 1 and public.is_admin());
+  for insert to authenticated
+  with check (id = 1 and empresa_id = public.current_empresa_id() and public.is_admin());
 create policy "configuracion_actualizar" on configuracion_prestamista
-  for update to authenticated using (id = 1 and public.is_admin()) with check (id = 1 and public.is_admin());
+  for update to authenticated
+  using (id = 1 and empresa_id = public.current_empresa_id() and public.is_admin())
+  with check (id = 1 and empresa_id = public.current_empresa_id() and public.is_admin());
 
 -- Fotos privadas de fachadas. Se sirven con enlaces temporales y solo los
 -- usuarios autenticados pueden leerlas o modificarlas.
@@ -771,18 +1221,68 @@ on conflict (id) do update set
   file_size_limit = excluded.file_size_limit,
   allowed_mime_types = excluded.allowed_mime_types;
 
+-- Acepta el formato nuevo `<empresa>/<cliente>/<archivo>` y, durante la
+-- transicion, el legado `<cliente>/<archivo>`. En ambos casos resuelve el
+-- cliente real y aplica la misma regla de cartera: master o prestamista
+-- asignado. No basta con conocer el UUID de la empresa o del cliente.
+create or replace function public.can_access_fachada_path(p_name text)
+returns boolean
+language sql
+security definer
+stable
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.profiles perfil
+    join public.empresas empresa on empresa.id = perfil.empresa_id and empresa.activo
+    join public.clientes cliente
+      on cliente.empresa_id = perfil.empresa_id
+      and cliente.id::text = case
+        when split_part(p_name, '/', 1) = perfil.empresa_id::text
+          then split_part(p_name, '/', 2)
+        else split_part(p_name, '/', 1)
+      end
+    where perfil.id = auth.uid()
+      and perfil.activo
+      and (
+        perfil.rol = 'admin'
+        or cliente.prestamista_id = perfil.id
+      )
+      and (
+        (
+          split_part(p_name, '/', 1) = perfil.empresa_id::text
+          and split_part(p_name, '/', 2) = cliente.id::text
+          and split_part(p_name, '/', 3) <> ''
+        )
+        or (
+          split_part(p_name, '/', 1) = cliente.id::text
+          and split_part(p_name, '/', 2) <> ''
+        )
+      )
+  );
+$$;
+
+revoke all on function public.can_access_fachada_path(text) from public, anon;
+grant execute on function public.can_access_fachada_path(text) to authenticated;
+
 drop policy if exists "fachadas_leer" on storage.objects;
 drop policy if exists "fachadas_insertar" on storage.objects;
 drop policy if exists "fachadas_actualizar" on storage.objects;
 drop policy if exists "fachadas_eliminar" on storage.objects;
 create policy "fachadas_leer" on storage.objects
-  for select to authenticated using (bucket_id = 'fachadas');
+  for select to authenticated
+  using (bucket_id = 'fachadas' and public.can_access_fachada_path(name));
 create policy "fachadas_insertar" on storage.objects
-  for insert to authenticated with check (bucket_id = 'fachadas');
+  for insert to authenticated
+  with check (bucket_id = 'fachadas' and public.can_access_fachada_path(name));
 create policy "fachadas_actualizar" on storage.objects
-  for update to authenticated using (bucket_id = 'fachadas') with check (bucket_id = 'fachadas');
+  for update to authenticated
+  using (bucket_id = 'fachadas' and public.can_access_fachada_path(name))
+  with check (bucket_id = 'fachadas' and public.can_access_fachada_path(name));
 create policy "fachadas_eliminar" on storage.objects
-  for delete to authenticated using (bucket_id = 'fachadas');
+  for delete to authenticated
+  using (bucket_id = 'fachadas' and public.can_access_fachada_path(name));
 
 revoke all on table configuracion_prestamista from public, anon, authenticated;
 grant select, insert, update on table configuracion_prestamista to authenticated;
@@ -1139,7 +1639,7 @@ begin
   select *
   into v_config
   from public.configuracion_prestamista
-  where id = 1
+  where empresa_id = v_prestamo.empresa_id
   for share;
   v_prefijo := coalesce(nullif(btrim(v_config.prefijo_recibo), ''), 'REC');
   v_digitos := greatest(coalesce(v_config.digitos_recibo, 6), length(v_pago.numero_recibo::text));

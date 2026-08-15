@@ -19,15 +19,18 @@
   fijo en el propio archivo (la anon key es pública; RLS controla el acceso).
 - **Auth:** Supabase Auth con correo/contraseña
   ([`apps/web/src/auth/AuthContext.tsx`](apps/web/src/auth/AuthContext.tsx)).
-  Los usuarios se crean a mano en el panel de Supabase (Authentication → Users
-  → Add user, con “Auto Confirm”). No hay registro público ni roles (MVP).
+  Cada empresa tiene una cuenta maestra (`profiles.rol = 'admin'`) y los demás
+  usuarios se crean por invitación con la Edge Function `invite-user`, siempre
+  dentro de esa misma empresa. No hay registro público. El alta controlada de
+  una empresa/master está documentada en [`ALTA_EMPRESA.md`](ALTA_EMPRESA.md).
   En Authentication → Providers → Email debe estar desactivado **Allow new
   users to sign up**; ocultar el registro en la interfaz no bloquea el endpoint
   público de Supabase.
 - **Esquema de la base:** [`supabase/schema.sql`](supabase/schema.sql) — se pega
   en el SQL Editor de Supabase y se vuelve a ejecutar cuando cambie. Tablas:
-  `configuracion_prestamista`, `clientes`, `prestamos`, `cuotas`, `pagos` y
-  `pago_aplicaciones`, todas con RLS “solo autenticados”. Incluye las funciones
+  `empresas`, `profiles`, `configuracion_prestamista`, `clientes`, `prestamos`,
+  `cuotas`, `pagos` y `pago_aplicaciones`, todas aisladas por empresa mediante
+  RLS. Incluye las funciones
   transaccionales `crear_prestamo_con_cuotas`, `registrar_pago` y
   `actualizar_estados_cartera`.
 
@@ -57,8 +60,10 @@
 
 ## Modelo de datos (Supabase, español)
 
-- **configuracion_prestamista**: ficha singleton del negocio; nombre, propietario,
+- **configuracion_prestamista**: una ficha por empresa; nombre, propietario,
   RTN, teléfono y dirección. Su ausencia activa la configuración inicial.
+- **empresas / profiles**: frontera multiempresa, cuenta maestra y usuarios
+  invitados de cada empresa.
 - **clientes**: nombre, identidad (DNI), teléfono, dirección, colonia,
   lugar_trabajo, referencias, foto privada de la fachada, estado
   (activo/moroso/cancelado), notas y orden_ruta (posición manual en la ruta de
@@ -144,8 +149,8 @@ npm run dev        # web en http://localhost:5173 (datos van directo a Supabase)
 ```
 
 Requisitos: ejecutar o volver a ejecutar `supabase/schema.sql` en el SQL Editor
-de Supabase después de cambios del esquema, y crear un usuario en
-Authentication → Users.
+de Supabase después de cambios del esquema, desplegar `invite-user` cuando
+cambie y seguir `ALTA_EMPRESA.md` para crear una empresa nueva.
 
 ## Despliegue (Vercel)
 

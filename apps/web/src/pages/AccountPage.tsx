@@ -1,13 +1,14 @@
 import { CheckCircle2, KeyRound, Save, ShieldCheck, UserRound } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { useProfile } from "../auth/ProfileContext";
+import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { PageHero } from "../components/PageHero";
 import { Button, Card, Field, Input } from "../components/ui";
 import { changePassword, updateMyProfile } from "../lib/userService";
 import type { Rol } from "../types";
 
 const ROL_LABELS: Record<Rol, string> = {
-  admin: "Administrador",
+  admin: "Cuenta maestra",
   prestamista: "Prestamista",
   gerente: "Gerente",
   cobrador: "Cobrador",
@@ -16,6 +17,8 @@ const ROL_LABELS: Record<Rol, string> = {
 
 export function AccountPage() {
   const { profile, reload } = useProfile();
+  const { config } = useBusinessConfig();
+  const isMaster = profile?.rol === "admin";
   const [form, setForm] = useState({ nombre: "", apellido: "", telefono: "" });
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState("");
@@ -81,8 +84,13 @@ export function AccountPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 pf-safe-page">
-      <PageHero title="Mi perfil">
-        <p className="pf-page-lead">Sus datos personales y la contraseña de acceso.</p>
+      <PageHero title={isMaster ? "Cuenta maestra" : "Mi perfil"}>
+        <p className="pf-page-lead">
+          {isMaster
+            ? `Administra ${config?.nombre_negocio || "esta empresa"} y los accesos de su equipo.`
+            : "Sus datos personales y la contraseña de acceso."}
+        </p>
+        {isMaster ? <p className="pf-page-lead-muted">Es la única cuenta que puede configurar la empresa e invitar usuarios.</p> : null}
       </PageHero>
 
       <Card className="p-5 md:p-6">
@@ -92,7 +100,9 @@ export function AccountPage() {
           </span>
           <div>
             <h2 className="font-bold text-pf-text">Datos personales</h2>
-            <p className="text-xs text-pf-muted">El correo y el rol los administra su empresa.</p>
+            <p className="text-xs text-pf-muted">
+              {isMaster ? "Esta cuenta está protegida y no puede degradarse ni desactivarse." : "El correo y el acceso los administra la cuenta maestra de su empresa."}
+            </p>
           </div>
         </div>
 
@@ -100,7 +110,7 @@ export function AccountPage() {
           <Field label="Nombre *" htmlFor="account-nombre"><Input id="account-nombre" value={form.nombre} onChange={(event) => setForm((current) => ({ ...current, nombre: event.target.value }))} required /></Field>
           <Field label="Apellido" htmlFor="account-apellido"><Input id="account-apellido" value={form.apellido} onChange={(event) => setForm((current) => ({ ...current, apellido: event.target.value }))} /></Field>
           <Field label="Correo electrónico" htmlFor="account-email"><Input id="account-email" value={profile?.email ?? ""} disabled /></Field>
-          <Field label="Rol" htmlFor="account-rol">
+          <Field label="Tipo de cuenta" htmlFor="account-rol">
             <div className="pf-control-surface flex min-h-[48px] items-center gap-2 px-3.5 py-2.5 text-pf-text-secondary md:min-h-[44px]">
               <ShieldCheck className="h-4 w-4 shrink-0 text-pf-muted" strokeWidth={2} aria-hidden />
               {profile ? ROL_LABELS[profile.rol] ?? profile.rol : "—"}

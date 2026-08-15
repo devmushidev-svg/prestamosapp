@@ -20,6 +20,44 @@ const CORS_HEADERS = {
 
 const ROLES_INVITABLES = new Set(["prestamista"]);
 
+function configuredRedirectOrigins(): Set<string> {
+  const configured = [
+    Deno.env.get("APP_URL") ?? "",
+    ...(Deno.env.get("ALLOWED_REDIRECT_ORIGINS") ?? "").split(","),
+  ];
+  const origins = new Set<string>();
+  for (const value of configured) {
+    const candidate = value.trim();
+    if (!candidate) continue;
+    try {
+      const url = new URL(candidate);
+      if (url.protocol === "https:" || url.protocol === "http:") origins.add(url.origin);
+    } catch {
+      // Una entrada mal formada se ignora; nunca se usa como redireccion.
+    }
+  }
+  return origins;
+}
+
+function safeInviteRedirect(requested: unknown): string | null {
+  const allowedOrigins = configuredRedirectOrigins();
+  if (allowedOrigins.size === 0) return null;
+
+  let selectedOrigin = allowedOrigins.values().next().value as string;
+  if (typeof requested === "string" && requested.trim()) {
+    try {
+      const requestedOrigin = new URL(requested).origin;
+      if (allowedOrigins.has(requestedOrigin)) selectedOrigin = requestedOrigin;
+    } catch {
+      // Usa el primer origen configurado; nunca confia en la URL recibida.
+    }
+  }
+
+  // La ruta es fija para que una URL permitida no se convierta en un open
+  // redirect a otra pantalla de la aplicacion.
+  return new URL("/restablecer-password", selectedOrigin).toString();
+}
+
 function respond(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -84,6 +122,18 @@ async function handleInvite(req: Request): Promise<Response> {
     return respond({ ok: false, message: "Solo un administrador puede invitar usuarios." }, 403);
   }
 
+  const { data: callerCompany, error: callerCompanyError } = await admin
+    .from("empresas")
+    .select("id,activo")
+    .eq("id", callerProfile.empresa_id)
+    .maybeSingle();
+  if (callerCompanyError) {
+    return respond({ ok: false, message: "No pudimos verificar la empresa." }, 500);
+  }
+  if (!callerCompany?.activo) {
+    return respond({ ok: false, message: "La empresa no esta activa." }, 403);
+  }
+
   let payload: any;
   try {
     payload = await req.json();
@@ -96,7 +146,14 @@ async function handleInvite(req: Request): Promise<Response> {
   const email = String(payload?.email ?? "").trim().toLowerCase();
   const telefono = String(payload?.telefono ?? "").trim();
   const rol = String(payload?.rol ?? "prestamista").trim();
-  const redirectTo = typeof payload?.redirectTo === "string" ? payload.redirectTo : undefined;
+  const redirectTo = safeInviteRedirect(payload?.redirectTo);
+
+  if (!redirectTo) {
+    return respond({
+      ok: false,
+      message: "Falta configurar APP_URL o ALLOWED_REDIRECT_ORIGINS en el servidor.",
+    }, 500);
+  }
 
   if (!nombre) return respond({ ok: false, message: "El nombre es obligatorio." }, 400);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -106,18 +163,21 @@ async function handleInvite(req: Request): Promise<Response> {
     return respond({ ok: false, message: "El rol indicado no es válido." }, 400);
   }
 
-  const { data: existingProfile } = await admin
+  const { data: existingProfile, error: existingProfileError } = await admin
     .from("profiles")
     .select("id")
     .eq("email", email)
     .maybeSingle();
+  if (existingProfileError) {
+    return respond({ ok: false, message: "No pudimos verificar si el correo ya existe." }, 500);
+  }
   if (existingProfile) {
     return respond({ ok: false, message: "Este correo electrónico ya está registrado." }, 409);
   }
 
   const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
     redirectTo,
-    data: { nombre, apellido: apellido || null },
+    data: { nombre, apellido: apellido || null, empresa_id: callerProfile.empresa_id },
   });
   if (inviteError || !invited?.user) {
     // Log completo en Supabase → Edge Functions → invite-user → Logs.
@@ -130,7 +190,9 @@ async function handleInvite(req: Request): Promise<Response> {
     }, (inviteError as { status?: number } | null)?.status ?? 400);
   }
 
-  const { error: profileError } = await admin.from("profiles").upsert({
+  // INSERT, no upsert: una invitacion jamas puede reasignar a otra empresa un
+  // perfil que ya exista por una carrera o por datos inconsistentes.
+  const { error: profileError } = await admin.from("profiles").insert({
     id: invited.user.id,
     empresa_id: callerProfile.empresa_id,
     nombre,

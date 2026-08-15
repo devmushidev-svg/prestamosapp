@@ -121,9 +121,9 @@ function ConfigContent({ setup }: { setup: boolean }) {
 
   return (
     <form className="mx-auto max-w-6xl space-y-4 pf-safe-page max-md:pb-24 max-md:[&_input]:scroll-mb-32 max-md:[&_select]:scroll-mb-32 max-md:[&_textarea]:scroll-mb-32" onSubmit={(event) => void submit(event)}>
-      <PageHero title={setup && !config ? "Configure su negocio" : "Datos del prestamista"}>
-        <p className="pf-page-lead">Estos datos aparecerán en sus recibos y documentos.</p>
-        <p className="pf-page-lead-muted">Podrá cambiarlos en cualquier momento.</p>
+      <PageHero title={setup && !config ? "Configure su empresa" : "Datos de la empresa"}>
+        <p className="pf-page-lead">Estos datos pertenecen a su empresa y aparecerán en sus recibos y documentos.</p>
+        <p className="pf-page-lead-muted">Solo la cuenta maestra puede modificarlos.</p>
       </PageHero>
 
       {status === "missing_schema" ? (
@@ -163,7 +163,7 @@ function ConfigContent({ setup }: { setup: boolean }) {
                 required
               />
             </Field>
-            <Field label="Nombre del propietario *" htmlFor="owner-name" className="sm:col-span-2">
+            <Field label="Propietario o responsable *" htmlFor="owner-name" className="sm:col-span-2">
               <Input
                 id="owner-name"
                 autoComplete="name"
@@ -226,7 +226,7 @@ function ConfigContent({ setup }: { setup: boolean }) {
       <div className="fixed inset-x-0 bottom-0 z-20 border-t border-pf-border-soft bg-pf-surface-elevated/95 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-10px_30px_rgba(15,23,42,0.12)] backdrop-blur-md md:hidden">
         <div className="mx-auto flex max-w-lg items-center gap-3">
           <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-pf-muted">{setup ? "Configuración inicial" : "Mi negocio"}</p>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-pf-muted">{setup ? "Configuración inicial" : "Mi empresa"}</p>
             <p className="truncate text-sm font-extrabold text-pf-text">{form.nombre_negocio.trim() || "Complete sus datos"}</p>
           </div>
           <Button type="submit" className="min-h-[52px] shrink-0 px-5" disabled={saving || !valid || status === "missing_schema"}>
