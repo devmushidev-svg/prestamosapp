@@ -1,13 +1,16 @@
-import { CheckCircle2, Mail, Pencil, Phone, ShieldCheck, UserCog, UserPlus, UserRoundX, Users } from "lucide-react";
+import { ArrowRightLeft, CheckCircle2, Mail, Pencil, Phone, ShieldCheck, TriangleAlert, UserCog, UserPlus, UserRoundX, Users } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useProfile } from "../auth/ProfileContext";
 import { useBusinessConfig } from "../business/BusinessConfigContext";
 import { PageHero } from "../components/PageHero";
-import { Button, Card, EmptyState, Field, Input, Modal } from "../components/ui";
+import { Button, Card, EmptyState, Field, Input, Modal, Select } from "../components/ui";
+import { useOffline } from "../offline/OfflineContext";
 import {
   inviteUser,
   listUsers,
+  MasterTransferError,
   setUserActive,
+  transferMasterAccount,
   updateUser,
   type InviteUserInput,
   type UpdateUserInput,
@@ -24,6 +27,25 @@ const ROL_LABELS: Record<Rol, string> = {
 
 const EMPTY_INVITE: InviteUserInput = { nombre: "", apellido: "", email: "", telefono: "", rol: "prestamista" };
 const EMPTY_EDIT: UpdateUserInput = { nombre: "", apellido: "", telefono: "", rol: "prestamista" };
+const TRANSFER_NOTICE_KEY = "multiprestamos.master-transfer-notice";
+
+function saveTransferNotice(message: string) {
+  try {
+    window.sessionStorage.setItem(TRANSFER_NOTICE_KEY, message);
+  } catch {
+    // El bloqueo de permisos sigue siendo seguro aunque no pueda persistir el aviso.
+  }
+}
+
+function takeTransferNotice() {
+  try {
+    const message = window.sessionStorage.getItem(TRANSFER_NOTICE_KEY) ?? "";
+    window.sessionStorage.removeItem(TRANSFER_NOTICE_KEY);
+    return message;
+  } catch {
+    return "";
+  }
+}
 
 function RoleBadge({ rol }: { rol: Rol }) {
   const isMasterRole = rol === "admin";
@@ -52,8 +74,9 @@ function StatusBadge({ activo }: { activo: boolean }) {
 }
 
 export function UsersPage() {
-  const { profile: myProfile } = useProfile();
+  const { profile: myProfile, reload: reloadMyProfile } = useProfile();
   const { config } = useBusinessConfig();
+  const { online, syncing, preparing, pending, attention, syncNow } = useOffline();
   const [list, setList] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [listErr, setListErr] = useState("");
@@ -70,7 +93,17 @@ export function UsersPage() {
   const [editSaving, setEditSaving] = useState(false);
 
   const [togglingId, setTogglingId] = useState<string | null>(null);
-  const [toggleErr, setToggleErr] = useState("");
+  const [toggleErr, setToggleErr] = useState(takeTransferNotice);
+
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [newMasterId, setNewMasterId] = useState("");
+  const [transferConfirmed, setTransferConfirmed] = useState(false);
+  const [transferErr, setTransferErr] = useState("");
+  const [transferSaving, setTransferSaving] = useState(false);
+  const [pendingTransferEdits, setPendingTransferEdits] = useState<{
+    userId: string;
+    input: UpdateUserInput;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -139,6 +172,26 @@ export function UsersPage() {
       setEditErr("El nombre es obligatorio.");
       return;
     }
+    if (editForm.rol === "admin") {
+      if (transferBlockedMessage) {
+        setEditErr(transferBlockedMessage);
+        return;
+      }
+      if (!editing.activo || editing.rol !== "prestamista") {
+        setEditErr("Solo puede transferir la cuenta maestra a un prestamista activo.");
+        return;
+      }
+      setNewMasterId(editing.id);
+      setPendingTransferEdits({
+        userId: editing.id,
+        input: { ...editForm, rol: "prestamista" },
+      });
+      setTransferConfirmed(false);
+      setTransferErr("");
+      setEditing(null);
+      setTransferOpen(true);
+      return;
+    }
     setEditSaving(true);
     try {
       await updateUser(editing.id, editForm);
@@ -165,8 +218,82 @@ export function UsersPage() {
     }
   }
 
+  function openTransfer() {
+    if (transferBlockedMessage) {
+      setToggleErr(transferBlockedMessage);
+      return;
+    }
+    setNewMasterId("");
+    setPendingTransferEdits(null);
+    setTransferConfirmed(false);
+    setTransferErr("");
+    setTransferOpen(true);
+  }
+
+  function closeTransfer() {
+    if (transferSaving) return;
+    setTransferOpen(false);
+    setPendingTransferEdits(null);
+  }
+
+  async function submitTransfer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (transferSaving) return;
+    if (transferBlockedMessage) {
+      setTransferErr(transferBlockedMessage);
+      return;
+    }
+    const selected = list.find((userProfile) => userProfile.id === newMasterId);
+    if (!selected || selected.rol !== "prestamista" || !selected.activo || selected.id === myProfile?.id) {
+      setTransferErr("Seleccione un prestamista activo de esta empresa.");
+      return;
+    }
+    if (!transferConfirmed) {
+      setTransferErr("Confirme que entiende el cambio de permisos antes de continuar.");
+      return;
+    }
+    setTransferErr("");
+    setTransferSaving(true);
+    try {
+      if (pendingTransferEdits?.userId === selected.id) {
+        await updateUser(selected.id, pendingTransferEdits.input);
+      }
+      await transferMasterAccount(selected.id);
+      setTransferOpen(false);
+      setPendingTransferEdits(null);
+      await reloadMyProfile({ recoverInvalidAccess: true });
+      void syncNow();
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "No pudimos transferir la cuenta maestra.";
+      if (cause instanceof MasterTransferError) {
+        if (cause.requiresAccessRecovery) saveTransferNotice(message);
+        await reloadMyProfile({
+          silent: !cause.requiresAccessRecovery,
+          recoverInvalidAccess: cause.requiresAccessRecovery,
+        });
+      }
+      if (!(cause instanceof MasterTransferError && cause.requiresAccessRecovery)) {
+        setTransferErr(message);
+      }
+      void syncNow();
+    } finally {
+      setTransferSaving(false);
+    }
+  }
+
   const masterProfile = list.find((userProfile) => userProfile.rol === "admin")
     ?? (myProfile?.rol === "admin" ? myProfile : null);
+  const transferBlockedMessage = !online
+    ? "Conéctese a Internet para transferir la cuenta maestra."
+    : syncing || preparing
+      ? "Espere a que termine la sincronización antes de transferir la cuenta maestra."
+      : pending > 0 || attention > 0
+        ? "Sincronice o revise las operaciones pendientes antes de transferir la cuenta maestra."
+        : "";
+  const transferCandidates = list.filter((userProfile) =>
+    userProfile.id !== myProfile?.id && userProfile.rol === "prestamista" && userProfile.activo
+  );
+  const selectedNewMaster = transferCandidates.find((userProfile) => userProfile.id === newMasterId) ?? null;
   const orderedList = [...list].sort((left, right) => {
     if (left.rol === "admin" && right.rol !== "admin") return -1;
     if (right.rol === "admin" && left.rol !== "admin") return 1;
@@ -204,6 +331,23 @@ export function UsersPage() {
             <p className="mt-1 truncate text-xs font-semibold text-pf-muted">
               {masterProfile.nombre} {masterProfile.apellido ?? ""} · {masterProfile.email}
             </p>
+          ) : null}
+        </div>
+        <div className="shrink-0 sm:text-right">
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full sm:w-auto"
+            disabled={loading || transferCandidates.length === 0 || Boolean(transferBlockedMessage)}
+            onClick={openTransfer}
+          >
+            <ArrowRightLeft className="h-4 w-4" strokeWidth={2} aria-hidden />
+            Transferir cuenta maestra
+          </Button>
+          {!loading && transferCandidates.length === 0 ? (
+            <p className="mt-1.5 text-xs text-pf-muted">Necesita un prestamista activo para transferirla.</p>
+          ) : transferBlockedMessage ? (
+            <p className="mt-1.5 max-w-sm text-xs text-pf-muted">{transferBlockedMessage}</p>
           ) : null}
         </div>
       </Card>
@@ -344,13 +488,101 @@ export function UsersPage() {
           </div>
           <Field label="Teléfono" htmlFor="edit-telefono"><Input id="edit-telefono" inputMode="tel" value={editForm.telefono} onChange={(event) => setEditForm((current) => ({ ...current, telefono: event.target.value }))} /></Field>
           <Field label="Rol" htmlFor="edit-rol">
-            <Input id="edit-rol" value={editing ? ROL_LABELS[editing.rol] ?? editing.rol : "Prestamista"} readOnly aria-readonly="true" />
-            <span className="text-xs text-pf-muted">La cuenta maestra es única; los usuarios invitados conservan su rol asignado.</span>
+            <Select
+              id="edit-rol"
+              value={editForm.rol}
+              disabled={editing?.rol !== "prestamista"}
+              onChange={(event) => setEditForm((current) => ({ ...current, rol: event.target.value as Rol }))}
+            >
+              {editing && editing.rol !== "prestamista" ? (
+                <option value={editing.rol}>{ROL_LABELS[editing.rol] ?? editing.rol}</option>
+              ) : null}
+              <option value="prestamista">Prestamista</option>
+              <option value="admin" disabled={!editing?.activo || Boolean(transferBlockedMessage)}>Cuenta maestra</option>
+            </Select>
+            <span className="text-xs text-pf-muted">
+              {editing?.activo
+                ? "Elegir Cuenta maestra abrirá una confirmación antes de cambiar los permisos."
+                : "Active primero al prestamista para poder transferirle la cuenta maestra."}
+            </span>
           </Field>
           {editErr ? <p className="text-sm font-medium text-pf-danger" role="alert">{editErr}</p> : null}
           <div className="flex flex-col-reverse gap-2 border-t border-pf-border-soft pt-4 sm:flex-row sm:justify-end">
             <Button variant="secondary" type="button" onClick={() => setEditing(null)} disabled={editSaving}>Cancelar</Button>
-            <Button type="submit" disabled={editSaving}>{editSaving ? "Guardando…" : "Guardar cambios"}</Button>
+            <Button type="submit" disabled={editSaving}>
+              {editSaving ? "Guardando…" : editForm.rol === "admin" ? "Continuar" : "Guardar cambios"}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={transferOpen} title="Transferir cuenta maestra" onClose={closeTransfer}>
+        <form className="space-y-4" onSubmit={(event) => void submitTransfer(event)}>
+          <div className="flex gap-3 rounded-xl border border-pf-warning-soft bg-pf-warning-soft/40 p-3 text-sm text-pf-text-secondary">
+            <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0 text-pf-warning" strokeWidth={2} aria-hidden />
+            <p>
+              Este cambio es inmediato. La nueva cuenta podrá configurar la empresa e invitar usuarios.
+            </p>
+          </div>
+
+          <Field label="Nueva cuenta maestra *" htmlFor="new-master-id">
+            <Select
+              id="new-master-id"
+              data-autofocus="true"
+              value={newMasterId}
+              disabled={transferSaving}
+              onChange={(event) => {
+                setNewMasterId(event.target.value);
+                if (pendingTransferEdits?.userId !== event.target.value) setPendingTransferEdits(null);
+                setTransferConfirmed(false);
+                setTransferErr("");
+              }}
+              required
+            >
+              <option value="">Seleccione un prestamista activo</option>
+              {transferCandidates.map((userProfile) => (
+                <option key={userProfile.id} value={userProfile.id}>
+                  {userProfile.nombre} {userProfile.apellido ?? ""} · {userProfile.email}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          {selectedNewMaster ? (
+            <div className="rounded-xl border border-pf-border-soft bg-pf-surface-soft p-3 text-sm">
+              <p className="font-bold text-pf-text">
+                {selectedNewMaster.nombre} {selectedNewMaster.apellido ?? ""} será la nueva cuenta maestra.
+              </p>
+              <p className="mt-1 text-pf-text-secondary">
+                Su cuenta quedará como Prestamista y perderá el acceso a la configuración y administración del equipo.
+              </p>
+            </div>
+          ) : null}
+
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-pf-border-soft p-3 text-sm text-pf-text-secondary">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4 shrink-0 accent-pf-primary"
+              checked={transferConfirmed}
+              disabled={!selectedNewMaster || transferSaving}
+              onChange={(event) => {
+                setTransferConfirmed(event.target.checked);
+                setTransferErr("");
+              }}
+            />
+            <span>Confirmo que entiendo que dejaré de ser la cuenta maestra de esta empresa.</span>
+          </label>
+
+          {transferErr ? <p className="text-sm font-medium text-pf-danger" role="alert">{transferErr}</p> : null}
+          <div className="flex flex-col-reverse gap-2 border-t border-pf-border-soft pt-4 sm:flex-row sm:justify-end">
+            <Button variant="secondary" type="button" onClick={closeTransfer} disabled={transferSaving}>Cancelar</Button>
+            <Button
+              type="submit"
+              variant="danger"
+              disabled={!selectedNewMaster || !transferConfirmed || transferSaving || Boolean(transferBlockedMessage)}
+            >
+              {transferSaving ? "Transfiriendo…" : "Confirmar transferencia"}
+            </Button>
           </div>
         </form>
       </Modal>

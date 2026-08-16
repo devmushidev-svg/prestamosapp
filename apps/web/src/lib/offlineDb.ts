@@ -1,6 +1,8 @@
 const DATABASE_NAME = "multiprestamos-offline";
 const DATABASE_VERSION = 1;
 const USER_SCOPE_STORAGE_KEY = "multiprestamos.offline-user-scope";
+const ACCESS_INVALID_STORAGE_PREFIX = "multiprestamos.offline-access-invalid";
+const ACCESS_EPOCH_STORAGE_PREFIX = "multiprestamos.offline-access-epoch";
 const BROADCAST_CHANNEL_NAME = "multiprestamos-offline-changes";
 
 const CACHE_STORE = "cache";
@@ -99,6 +101,13 @@ export class OfflineUserScopeError extends Error {
   }
 }
 
+export class OfflineAccessInvalidError extends Error {
+  constructor() {
+    super("Los permisos de esta cuenta cambiaron. Conéctese a Internet para renovar la copia offline.");
+    this.name = "OfflineAccessInvalidError";
+  }
+}
+
 export const offlineDbEvents = new EventTarget();
 
 let currentUserScope: string | null | undefined;
@@ -170,6 +179,93 @@ function requireUserScope(): string {
   const scope = getOfflineUserScope();
   if (!scope) throw new OfflineUserScopeError();
   return scope;
+}
+
+function accessInvalidStorageKey(scope: string): string {
+  return `${ACCESS_INVALID_STORAGE_PREFIX}:${scope}`;
+}
+
+function accessEpochStorageKey(scope: string): string {
+  return `${ACCESS_EPOCH_STORAGE_PREFIX}:${scope}`;
+}
+
+export function isOfflineAccessInvalid(scope = getOfflineUserScope()): boolean {
+  if (!scope) return false;
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage) return true;
+    return storage.getItem(accessInvalidStorageKey(scope)) === "1";
+  } catch {
+    // Sin el marcador no es seguro abrir una copia cuyo alcance pudo cambiar.
+    return true;
+  }
+}
+
+export function getOfflineAccessEpoch(scope = getOfflineUserScope()): number {
+  if (!scope) return 0;
+  try {
+    const value = Number(globalThis.localStorage?.getItem(accessEpochStorageKey(scope)) ?? 0);
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function invalidateOfflineAccess(scope = requireUserScope()): number {
+  let nextEpoch = 0;
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage) throw new Error("localStorage no disponible");
+    nextEpoch = getOfflineAccessEpoch(scope) + 1;
+    storage.setItem(accessInvalidStorageKey(scope), "1");
+    storage.setItem(accessEpochStorageKey(scope), String(nextEpoch));
+    if (storage.getItem(accessInvalidStorageKey(scope)) !== "1"
+      || storage.getItem(accessEpochStorageKey(scope)) !== String(nextEpoch)) {
+      throw new Error("No se pudo verificar el marcador de acceso");
+    }
+  } catch {
+    throw new OfflineDatabaseUnavailableError(
+      "No se pudo proteger la copia offline antes de cambiar los permisos.",
+    );
+  }
+  emitChange({ scope, area: "cache", action: "delete" });
+  return nextEpoch;
+}
+
+export function restoreOfflineAccess(
+  scope = requireUserScope(),
+  expectedEpoch = getOfflineAccessEpoch(scope),
+): void {
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage) throw new Error("localStorage no disponible");
+    if (getOfflineAccessEpoch(scope) !== expectedEpoch) {
+      throw new OfflineCacheChangedError();
+    }
+    storage.removeItem(accessInvalidStorageKey(scope));
+    if (storage.getItem(accessInvalidStorageKey(scope)) !== null) {
+      throw new Error("No se pudo retirar el marcador de acceso");
+    }
+  } catch {
+    throw new OfflineDatabaseUnavailableError(
+      "No se pudo habilitar la nueva copia offline en este dispositivo.",
+    );
+  }
+  emitChange({ scope, area: "cache", action: "update" });
+}
+
+function assertOfflineAccessValid(scope: string): void {
+  if (isOfflineAccessInvalid(scope)) throw new OfflineAccessInvalidError();
+}
+
+function assertOfflineAccessEpoch(
+  scope: string,
+  expectedEpoch: number,
+  allowInvalidAccess = false,
+): void {
+  if (getOfflineUserScope() !== scope) throw new OfflineUserScopeError();
+  if (!allowInvalidAccess) assertOfflineAccessValid(scope);
+  if (getOfflineAccessEpoch(scope) !== expectedEpoch) throw new OfflineCacheChangedError();
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -263,12 +359,15 @@ function openDatabase(): Promise<IDBDatabase> {
 
 export async function readCache<T>(key: string): Promise<T | undefined> {
   const scope = requireUserScope();
+  assertOfflineAccessValid(scope);
+  const accessEpoch = getOfflineAccessEpoch(scope);
   const database = await openDatabase();
   const transaction = database.transaction(CACHE_STORE, "readonly");
   const record = await requestResult(
     transaction.objectStore(CACHE_STORE).get([scope, key]) as IDBRequest<CacheRecord | undefined>,
   );
   await transactionComplete(transaction);
+  assertOfflineAccessEpoch(scope, accessEpoch);
   return record?.value as T | undefined;
 }
 
@@ -322,16 +421,25 @@ export async function getOfflineCacheRevision(): Promise<number> {
   return normalizeRevision(await readCache<number>(CACHE_REVISION_KEY).catch(() => 0));
 }
 
-export async function writeCache<T>(key: string, value: T, expectedScope?: string): Promise<void> {
+export async function writeCache<T>(
+  key: string,
+  value: T,
+  expectedScope?: string,
+  options: { allowInvalidAccess?: boolean } = {},
+): Promise<void> {
   const scope = requireUserScope();
   if (expectedScope && scope !== expectedScope) throw new OfflineUserScopeError();
+  if (!options.allowInvalidAccess) assertOfflineAccessValid(scope);
+  const accessEpoch = getOfflineAccessEpoch(scope);
   const database = await openDatabase();
   if (expectedScope && getOfflineUserScope() !== expectedScope) throw new OfflineUserScopeError();
+  assertOfflineAccessEpoch(scope, accessEpoch, options.allowInvalidAccess);
   const transaction = database.transaction(CACHE_STORE, "readwrite");
   const store = transaction.objectStore(CACHE_STORE);
   store.put({ scope, key, value, updatedAt: nowIso() } satisfies CacheRecord);
   bumpCacheRevision(store, scope);
   await transactionComplete(transaction);
+  assertOfflineAccessEpoch(scope, accessEpoch, options.allowInvalidAccess);
   emitChange({ scope, area: "cache", action: "set", key });
 }
 
@@ -343,12 +451,14 @@ export async function writeCache<T>(key: string, value: T, expectedScope?: strin
 export async function writeCacheBatch(
   entries: readonly OfflineCacheEntry[],
   expectedScope?: string,
-  options: { expectedRevision?: number; requireEmptyOutbox?: boolean } = {},
+  options: { expectedRevision?: number; requireEmptyOutbox?: boolean; allowInvalidAccess?: boolean } = {},
 ): Promise<void> {
   const scope = requireUserScope();
   if (expectedScope && scope !== expectedScope) {
     throw new OfflineUserScopeError();
   }
+  if (!options.allowInvalidAccess) assertOfflineAccessValid(scope);
+  const accessEpoch = getOfflineAccessEpoch(scope);
   const uniqueEntries = Array.from(
     new Map(entries.map((entry) => [entry.key, entry] as const)).values(),
   );
@@ -358,6 +468,7 @@ export async function writeCacheBatch(
   if (expectedScope && getOfflineUserScope() !== expectedScope) {
     throw new OfflineUserScopeError();
   }
+  assertOfflineAccessEpoch(scope, accessEpoch, options.allowInvalidAccess);
   const storeNames = options.requireEmptyOutbox ? [CACHE_STORE, OUTBOX_STORE] : [CACHE_STORE];
   const transaction = database.transaction(storeNames, "readwrite");
   const store = transaction.objectStore(CACHE_STORE);
@@ -392,6 +503,7 @@ export async function writeCacheBatch(
     updatedAt,
   } satisfies CacheRecord);
   await completed;
+  assertOfflineAccessEpoch(scope, accessEpoch, options.allowInvalidAccess);
   uniqueEntries.forEach(({ key }) => emitChange({ scope, area: "cache", action: "set", key }));
 }
 
@@ -400,7 +512,10 @@ export async function updateCache<T>(
   updater: (current: T | undefined) => T | undefined,
 ): Promise<T | undefined> {
   const scope = requireUserScope();
+  assertOfflineAccessValid(scope);
+  const accessEpoch = getOfflineAccessEpoch(scope);
   const database = await openDatabase();
+  assertOfflineAccessEpoch(scope, accessEpoch);
   const transaction = database.transaction(CACHE_STORE, "readwrite");
   const store = transaction.objectStore(CACHE_STORE);
   bumpCacheRevision(store, scope);
@@ -421,19 +536,66 @@ export async function updateCache<T>(
     request.addEventListener("error", () => reject(request.error), { once: true });
   });
   const [next] = await Promise.all([mutation, completed]);
+  assertOfflineAccessEpoch(scope, accessEpoch);
   emitChange({ scope, area: "cache", action: next === undefined ? "delete" : "update", key });
   return next;
 }
 
 export async function deleteCache(key: string): Promise<void> {
   const scope = requireUserScope();
+  assertOfflineAccessValid(scope);
+  const accessEpoch = getOfflineAccessEpoch(scope);
   const database = await openDatabase();
+  assertOfflineAccessEpoch(scope, accessEpoch);
   const transaction = database.transaction(CACHE_STORE, "readwrite");
   const store = transaction.objectStore(CACHE_STORE);
   store.delete([scope, key]);
   bumpCacheRevision(store, scope);
   await transactionComplete(transaction);
+  assertOfflineAccessEpoch(scope, accessEpoch);
   emitChange({ scope, area: "cache", action: "delete", key });
+}
+
+/**
+ * Elimina toda la copia descargada del usuario actual sin tocar su cola ni
+ * sus alias idempotentes. Se usa cuando cambia el alcance de permisos: borrar
+ * solo el manifiesto no basta porque los detalles y las fotos tienen claves
+ * dinámicas y todavía podrían abrirse directamente sin conexión.
+ */
+export async function clearOfflineCache(): Promise<void> {
+  const scope = requireUserScope();
+  const database = await openDatabase();
+  const transaction = database.transaction(CACHE_STORE, "readwrite");
+  const store = transaction.objectStore(CACHE_STORE);
+  const revisionRequest = store.get([scope, CACHE_REVISION_KEY]) as IDBRequest<CacheRecord | undefined>;
+  const cursorRequest = store.index("scope").openCursor(IDBKeyRange.only(scope));
+  const completed = transactionComplete(transaction);
+
+  const cleared = new Promise<void>((resolve, reject) => {
+    cursorRequest.addEventListener("success", () => {
+      const cursor = cursorRequest.result;
+      if (cursor) {
+        cursor.delete();
+        cursor.continue();
+        return;
+      }
+      store.put({
+        scope,
+        key: CACHE_REVISION_KEY,
+        value: revisionValue(revisionRequest.result) + 1,
+        updatedAt: nowIso(),
+      } satisfies CacheRecord);
+      resolve();
+    });
+    cursorRequest.addEventListener(
+      "error",
+      () => reject(cursorRequest.error ?? new Error("No se pudo limpiar la copia sin conexión.")),
+      { once: true },
+    );
+  });
+
+  await Promise.all([cleared, completed]);
+  emitChange({ scope, area: "cache", action: "delete" });
 }
 
 function errorProperty(error: unknown, property: string): unknown {
@@ -492,13 +654,18 @@ function operationAffectsCache(operation: OfflineOperation, key: string): boolea
 
 export async function readThroughCache<T>(key: string, loader: () => Promise<T>): Promise<T> {
   const requestScope = getOfflineUserScope();
+  if (requestScope) assertOfflineAccessValid(requestScope);
+  const requestAccessEpoch = getOfflineAccessEpoch(requestScope);
   const preserveOptimisticCopy = requestScope
     ? await listOfflineOperations().then((operations) => operations.some((item) => operationAffectsCache(item, key))).catch(() => false)
     : false;
   const browserIsOffline = typeof navigator !== "undefined" && navigator.onLine === false;
   if (browserIsOffline || preserveOptimisticCopy) {
     const cached = await readCache<T>(key);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      if (requestScope) assertOfflineAccessEpoch(requestScope, requestAccessEpoch);
+      return cached;
+    }
     if (browserIsOffline) throw new OfflineCacheMissError();
   }
   if (preferOfflineCache) {
@@ -506,6 +673,7 @@ export async function readThroughCache<T>(key: string, loader: () => Promise<T>)
     if (cached === undefined) throw new OfflineCacheMissError();
     const preferredScope = getOfflineUserScope();
     if (!preferredScope) throw new OfflineUserScopeError();
+    const preferredAccessEpoch = getOfflineAccessEpoch(preferredScope);
     const preferredRevision = await getOfflineCacheRevision();
 
     // Con una sesión aún no confirmada damos una ventana corta al servidor.
@@ -515,22 +683,32 @@ export async function readThroughCache<T>(key: string, loader: () => Promise<T>)
     let fallbackWon = false;
     const fresh = loader().then(async (value) => {
       if (fallbackWon) return cached;
+      assertOfflineAccessEpoch(preferredScope, preferredAccessEpoch);
       await writeCacheBatch(
         [{ key, value }],
         preferredScope,
         { expectedRevision: preferredRevision, requireEmptyOutbox: true },
       );
+      assertOfflineAccessEpoch(preferredScope, preferredAccessEpoch);
       return value;
     });
-    const fallback = new Promise<T>((resolve) => {
+    const fallback = new Promise<T>((resolve, reject) => {
       timeoutId = setTimeout(() => {
         fallbackWon = true;
-        resolve(cached);
+        try {
+          assertOfflineAccessEpoch(preferredScope, preferredAccessEpoch);
+          resolve(cached);
+        } catch (error) {
+          reject(error);
+        }
       }, OFFLINE_CACHE_NETWORK_GRACE_MS);
     });
     try {
       return await Promise.race([fresh, fallback]);
-    } catch {
+    } catch (error) {
+      if (error instanceof OfflineAccessInvalidError
+        || error instanceof OfflineCacheChangedError
+        || error instanceof OfflineUserScopeError) throw error;
       return cached;
     } finally {
       if (timeoutId !== undefined) clearTimeout(timeoutId);
@@ -538,7 +716,11 @@ export async function readThroughCache<T>(key: string, loader: () => Promise<T>)
   }
   try {
     const fresh = await loader();
-    if (requestScope) await writeCache(key, fresh, requestScope);
+    if (requestScope) {
+      assertOfflineAccessEpoch(requestScope, requestAccessEpoch);
+      await writeCache(key, fresh, requestScope);
+      assertOfflineAccessEpoch(requestScope, requestAccessEpoch);
+    }
     return fresh;
   } catch (error) {
     if (!isNetworkFailure(error)) throw error;
@@ -570,7 +752,13 @@ export async function queueOfflineOperation<TPayload>(
   input: QueueOfflineOperationInput<TPayload>,
 ): Promise<OfflineOperation<TPayload>> {
   const scope = requireUserScope();
+  assertOfflineAccessValid(scope);
+  const accessEpoch = getOfflineAccessEpoch(scope);
   const database = await openDatabase();
+  // La transferencia de cuenta maestra pone el marcador antes de revisar la
+  // cola. Así ninguna operación que todavía no abrió su transacción puede
+  // aparecer después de esa revisión.
+  assertOfflineAccessEpoch(scope, accessEpoch);
   const timestamp = nowIso();
   const operation: OfflineOperation<TPayload> = {
     id: input.id ?? createOperationId(),
@@ -612,6 +800,7 @@ export async function queueOfflineOperation<TPayload>(
     request.addEventListener("error", () => reject(request.error), { once: true });
   });
   const [existing] = await Promise.all([mutation, completed]);
+  assertOfflineAccessEpoch(scope, accessEpoch);
   if (existing) {
     if (existing.scope !== scope || !sameQueuedOperation(existing, operation)) {
       throw new Error("El identificador de la operación sin conexión ya fue usado con datos diferentes.");

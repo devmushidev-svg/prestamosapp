@@ -842,8 +842,9 @@ grant execute on function public.provisionar_empresa_master(uuid, text, text, te
   to service_role;
 
 -- El correo queda ligado a Auth y ningun usuario puede cambiar su propio
--- rol/estado/empresa. La cuenta maestra tampoco puede desactivarse ni
--- transferirse mediante un update ordinario.
+-- rol/estado/empresa fuera de la transferencia controlada de master. La
+-- cuenta maestra tampoco puede desactivarse ni transferirse mediante un
+-- update ordinario.
 create or replace function public.profiles_guard_self_changes()
 returns trigger
 language plpgsql
@@ -858,13 +859,36 @@ begin
     or new.creado_en is distinct from old.creado_en then
     raise exception using message = 'La identidad, empresa y datos de alta del perfil son inmutables.', errcode = '42501';
   end if;
-  if new.id = auth.uid() and (
-    new.rol is distinct from old.rol
-    or new.activo is distinct from old.activo
-  ) then
+  if new.id = auth.uid() and new.activo is distinct from old.activo then
     raise exception using message = 'No puede modificar su propio rol, estado o empresa.', errcode = '42501';
   end if;
-  if old.rol = 'admin' and (new.rol is distinct from old.rol or (new.activo is distinct from old.activo and not new.activo))
+  if new.id = auth.uid()
+    and new.rol is distinct from old.rol
+    and not (
+      old.rol = 'admin'
+      and new.rol = 'prestamista'
+      and new.activo
+      and coalesce(
+        current_setting('multiprestamos.transfer_master_actor', true) = old.id::text,
+        false
+      )
+    ) then
+    raise exception using message = 'No puede modificar su propio rol, estado o empresa.', errcode = '42501';
+  end if;
+  if old.rol = 'admin'
+    and (
+      new.rol is distinct from old.rol
+      or (new.activo is distinct from old.activo and not new.activo)
+    )
+    and not (
+      coalesce(old.id = auth.uid(), false)
+      and new.rol = 'prestamista'
+      and new.activo
+      and coalesce(
+        current_setting('multiprestamos.transfer_master_actor', true) = old.id::text,
+        false
+      )
+    )
   then
     raise exception using message = 'La cuenta maestra de la empresa no se puede desactivar ni cambiar de rol.', errcode = '23514';
   end if;
@@ -877,6 +901,130 @@ drop trigger if exists trg_profiles_guard_self_changes on profiles;
 create trigger trg_profiles_guard_self_changes
   before update on profiles
   for each row execute function public.profiles_guard_self_changes();
+
+-- Transfiere la unica cuenta maestra a un prestamista activo de la misma
+-- empresa. La democion y la promocion ocurren dentro de una sola transaccion:
+-- el constraint trigger diferido comprueba al confirmar que la empresa sigue
+-- teniendo master, y el indice parcial conserva la unicidad. La excepcion
+-- estrecha del trigger anterior no permite una democion directa aislada,
+-- porque esa operacion falla al confirmar por `trg_profiles_empresa_master`.
+create or replace function public.transferir_cuenta_master(
+  p_nuevo_master_id uuid
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_actor_id uuid := auth.uid();
+  v_empresa_id uuid;
+  v_actor_rol text;
+  v_actor_activo boolean;
+  v_empresa_activa boolean;
+  v_destino_rol text;
+  v_destino_activo boolean;
+  v_destino_confirmado boolean;
+  v_destino_habilitado boolean;
+  v_updated uuid;
+begin
+  if v_actor_id is null then
+    raise exception using message = 'Debe iniciar sesion para transferir la cuenta maestra.', errcode = '28000';
+  end if;
+  if p_nuevo_master_id is null then
+    raise exception using message = 'Debe indicar el nuevo titular de la cuenta maestra.', errcode = '23514';
+  end if;
+  if p_nuevo_master_id = v_actor_id then
+    raise exception using message = 'El nuevo titular debe ser otro usuario.', errcode = '23514';
+  end if;
+
+  -- Serializa dos intentos simultaneos de la misma empresa sobre el master
+  -- actual. Al despertar del bloqueo, el segundo intento vuelve a leer el rol.
+  select p.empresa_id, p.rol, p.activo, e.activo
+  into v_empresa_id, v_actor_rol, v_actor_activo, v_empresa_activa
+  from public.profiles p
+  join public.empresas e on e.id = p.empresa_id
+  where p.id = v_actor_id
+  for update of p;
+
+  if not found
+    or v_actor_rol <> 'admin'
+    or not v_actor_activo
+    or not v_empresa_activa then
+    raise exception using message = 'Solo la cuenta maestra activa puede transferir la titularidad.', errcode = '42501';
+  end if;
+
+  -- El filtro por empresa evita revelar o modificar perfiles de otra empresa.
+  select
+    p.rol,
+    p.activo,
+    u.email_confirmed_at is not null,
+    u.deleted_at is null
+      and nullif(u.encrypted_password, '') is not null
+      and (u.banned_until is null or u.banned_until <= now())
+  into
+    v_destino_rol,
+    v_destino_activo,
+    v_destino_confirmado,
+    v_destino_habilitado
+  from public.profiles p
+  join auth.users u on u.id = p.id
+  where p.id = p_nuevo_master_id
+    and p.empresa_id = v_empresa_id
+  for update of p, u;
+
+  if not found then
+    raise exception using message = 'El usuario indicado no existe o no pertenece a su empresa.', errcode = '23503';
+  end if;
+  if v_destino_rol <> 'prestamista' or not v_destino_activo then
+    raise exception using message = 'El nuevo titular debe ser un prestamista activo.', errcode = '23514';
+  end if;
+  if not v_destino_confirmado or not v_destino_habilitado then
+    raise exception using
+      message = 'El nuevo titular debe haber aceptado la invitacion y tener su acceso habilitado.',
+      errcode = '23514';
+  end if;
+
+  -- El trigger solo permite degradar al master cuando esta marca local de la
+  -- transaccion fue establecida por este RPC. Una mutacion directa, incluso
+  -- dentro de una transaccion con otra promocion, permanece bloqueada.
+  perform set_config('multiprestamos.transfer_master_actor', v_actor_id::text, true);
+
+  -- Se libera primero la posicion unica de admin. Si la promocion falla, la
+  -- transaccion completa se revierte y el master anterior conserva su rol.
+  update public.profiles
+  set rol = 'prestamista'
+  where id = v_actor_id
+    and empresa_id = v_empresa_id
+    and rol = 'admin'
+    and activo
+  returning id into v_updated;
+
+  if v_updated is null then
+    raise exception using message = 'La cuenta maestra cambio durante la transferencia.', errcode = '40001';
+  end if;
+
+  v_updated := null;
+  update public.profiles
+  set rol = 'admin'
+  where id = p_nuevo_master_id
+    and empresa_id = v_empresa_id
+    and rol = 'prestamista'
+    and activo
+  returning id into v_updated;
+
+  if v_updated is null then
+    raise exception using message = 'El nuevo titular cambio durante la transferencia.', errcode = '40001';
+  end if;
+
+  return v_updated;
+end;
+$$;
+
+revoke all on function public.transferir_cuenta_master(uuid)
+  from public, anon, authenticated, service_role;
+grant execute on function public.transferir_cuenta_master(uuid)
+  to authenticated;
 
 alter table empresas enable row level security;
 alter table profiles enable row level security;

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useProfile } from "../auth/ProfileContext";
 import { LoanStatusBadge } from "../components/LoanStatusBadge";
+import { MasterAssignmentSummary } from "../components/MasterAssignmentSummary";
 import { PageHero } from "../components/PageHero";
 import { Button, Card, EmptyState, Field, Input, PaginationBar, Select } from "../components/ui";
 import { formatDate, formatDateOnly, formatLoanNumber, formatMoney, formatPaymentNumber } from "../lib/format";
@@ -60,10 +61,15 @@ function MetricCard({ label, value, detail, icon: Icon, tone }: {
 
 export function ReportsPage() {
   const navigate = useNavigate();
-  const { isAdmin } = useProfile();
+  const { isAdmin, profile } = useProfile();
+  const accessKey = profile
+    ? `${profile.id}:${profile.empresa_id}:${profile.rol}:${profile.activo}`
+    : "sin-perfil";
   const [draftRange, setDraftRange] = useState(initialRange);
   const [range, setRange] = useState(initialRange);
-  const [report, setReport] = useState<PortfolioReport | null>(null);
+  const [loadedReport, setLoadedReport] = useState<PortfolioReport | null>(null);
+  const [reportAccessKey, setReportAccessKey] = useState(accessKey);
+  const report = reportAccessKey === accessKey ? loadedReport : null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [rangeError, setRangeError] = useState("");
@@ -75,7 +81,11 @@ export function ReportsPage() {
   const requestRef = useRef(0);
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isAdmin) {
+      setTeam([]);
+      setPrestamistaId("todos");
+      return;
+    }
     listUsers().then(setTeam).catch(() => setTeam([]));
   }, [isAdmin]);
 
@@ -83,10 +93,14 @@ export function ReportsPage() {
     const request = ++requestRef.current;
     setLoading(true);
     setError("");
-    setReport(null);
+    setLoadedReport(null);
+    setReportAccessKey(accessKey);
     try {
       const nextReport = await getPortfolioReport(range.desde, range.hasta);
-      if (request === requestRef.current) setReport(nextReport);
+      if (request === requestRef.current) {
+        setLoadedReport(nextReport);
+        setReportAccessKey(accessKey);
+      }
     } catch {
       if (request === requestRef.current) {
         setError("No pudimos preparar los reportes. Revise la conexión e intente de nuevo.");
@@ -94,7 +108,7 @@ export function ReportsPage() {
     } finally {
       if (request === requestRef.current) setLoading(false);
     }
-  }, [range.desde, range.hasta]);
+  }, [accessKey, range.desde, range.hasta]);
 
   useEffect(() => {
     void load();
@@ -116,6 +130,34 @@ export function ReportsPage() {
         .some((value) => value!.toLocaleLowerCase("es-HN").includes(term));
     });
   }, [report, search, status, prestamistaId, isAdmin]);
+  const filteredPayments = useMemo(() => {
+    if (!report) return [];
+    const loanIds = new Set(filteredRows.map((row) => row.prestamo.id));
+    return report.payments.filter((payment) => loanIds.has(payment.prestamo_id));
+  }, [filteredRows, report]);
+  const filteredTotals = useMemo(() => {
+    const rowsIncludedInPortfolio = filteredRows.filter((row) => row.prestamo.estado !== "cancelado");
+    const countStatus = (target: EstadoPrestamo) => filteredRows.filter((row) => row.prestamo.estado === target).length;
+    return {
+      capitalPrestado: rowsIncludedInPortfolio.reduce((sum, row) => sum + row.prestamo.monto, 0),
+      totalPactado: rowsIncludedInPortfolio.reduce((sum, row) => sum + row.totalPactado, 0),
+      porCobrar: rowsIncludedInPortfolio.reduce((sum, row) => sum + row.pendiente, 0),
+      vencido: rowsIncludedInPortfolio.reduce((sum, row) => sum + row.vencido, 0),
+      cobradoPeriodo: filteredPayments.reduce((sum, payment) => sum + payment.monto, 0),
+      interesPactado: rowsIncludedInPortfolio.reduce((sum, row) => sum + row.interesPactado, 0),
+      interesCobradoEstimado: rowsIncludedInPortfolio.reduce((sum, row) => sum + row.interesCobradoEstimado, 0),
+      activos: filteredRows.filter((row) => ["activo", "al_dia", "en_mora"].includes(row.prestamo.estado)).length,
+      cancelados: countStatus("cancelado"),
+      pagados: countStatus("pagado"),
+      morosos: countStatus("en_mora"),
+    };
+  }, [filteredPayments, filteredRows]);
+  const filteredReport = useMemo(() => report ? {
+    ...report,
+    rows: filteredRows,
+    payments: filteredPayments,
+    totals: filteredTotals,
+  } : null, [filteredPayments, filteredRows, filteredTotals, report]);
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const visibleRows = filteredRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
@@ -141,7 +183,7 @@ export function ReportsPage() {
           <Button type="button" variant="secondary" onClick={() => window.print()} disabled={loading || Boolean(error) || !report}>
             <Printer className="h-4 w-4" strokeWidth={2} aria-hidden />PDF / imprimir
           </Button>
-          <Button type="button" onClick={() => report && downloadPortfolioCsv({ ...report, rows: filteredRows })} disabled={loading || Boolean(error) || !report}>
+          <Button type="button" onClick={() => filteredReport && downloadPortfolioCsv(filteredReport)} disabled={loading || Boolean(error) || !filteredReport}>
             <Download className="h-4 w-4" strokeWidth={2} aria-hidden />Excel (.csv)
           </Button>
         </div>
@@ -169,43 +211,58 @@ export function ReportsPage() {
       {error ? <Card className="p-5 text-center text-sm text-pf-danger" role="alert"><p>{error}</p><Button type="button" variant="secondary" className="mt-3" onClick={() => void load()}>Reintentar</Button></Card> : loading ? <Card className="p-10 text-center text-sm font-medium text-pf-muted" aria-live="polite">Preparando reportes…</Card> : report ? (
         <>
           <div className="hidden print:block">
-            <h2 className="text-base font-bold">Resumen general</h2>
+            <h2 className="text-base font-bold">Resumen de la cartera filtrada</h2>
             <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-              <p><strong>Capital:</strong> {formatMoney("L", report.totals.capitalPrestado)}</p>
-              <p><strong>Por cobrar:</strong> {formatMoney("L", report.totals.porCobrar)}</p>
-              <p><strong>Vencido:</strong> {formatMoney("L", report.totals.vencido)}</p>
-              <p><strong>Cobrado:</strong> {formatMoney("L", report.totals.cobradoPeriodo)}</p>
-              <p><strong>Interés pactado:</strong> {formatMoney("L", report.totals.interesPactado)}</p>
-              <p><strong>Interés cobrado estimado:</strong> {formatMoney("L", report.totals.interesCobradoEstimado)}</p>
+              <p><strong>Capital original:</strong> {formatMoney("L", filteredTotals.capitalPrestado)}</p>
+              <p><strong>Total pactado:</strong> {formatMoney("L", filteredTotals.totalPactado)}</p>
+              <p><strong>Saldo pendiente actual:</strong> {formatMoney("L", filteredTotals.porCobrar)}</p>
+              <p><strong>Saldo vencido:</strong> {formatMoney("L", filteredTotals.vencido)}</p>
+              <p><strong>Cobrado en el período:</strong> {formatMoney("L", filteredTotals.cobradoPeriodo)}</p>
+              <p><strong>Interés pactado:</strong> {formatMoney("L", filteredTotals.interesPactado)}</p>
+              <p><strong>Interés cobrado estimado:</strong> {formatMoney("L", filteredTotals.interesCobradoEstimado)}</p>
             </div>
+            <p className="mt-2 text-[9px] leading-relaxed">El capital original es el dinero desembolsado. El saldo pendiente actual es lo que queda por cobrar del total pactado (capital + interés) después de los pagos; por eso puede ser menor que el capital original.</p>
             <h2 className="mb-2 mt-5 text-base font-bold">Cartera filtrada ({filteredRows.length})</h2>
             <table className="w-full border-collapse text-[9px]">
-              <thead><tr className="bg-stone-100"><th className="border border-stone-400 p-1 text-left">Préstamo</th><th className="border border-stone-400 p-1 text-left">Cliente</th><th className="border border-stone-400 p-1 text-left">Estado</th><th className="border border-stone-400 p-1 text-right">Capital</th><th className="border border-stone-400 p-1 text-right">Pagado</th><th className="border border-stone-400 p-1 text-right">Pendiente</th><th className="border border-stone-400 p-1 text-right">Vencido</th></tr></thead>
-              <tbody>{filteredRows.map((row) => <tr key={`print-${row.prestamo.id}`}><td className="border border-stone-300 p-1">{formatLoanNumber(row.prestamo.numero, row.prestamo.id)}</td><td className="border border-stone-300 p-1">{row.prestamo.cliente?.nombre ?? "Cliente no disponible"}</td><td className="border border-stone-300 p-1">{row.prestamo.estado}</td><td className="border border-stone-300 p-1 text-right">{formatMoney("L", row.prestamo.monto)}</td><td className="border border-stone-300 p-1 text-right">{formatMoney("L", row.pagado)}</td><td className="border border-stone-300 p-1 text-right">{formatMoney("L", row.pendiente)}</td><td className="border border-stone-300 p-1 text-right">{formatMoney("L", row.vencido)}</td></tr>)}</tbody>
+              <thead><tr className="bg-stone-100"><th className="border border-stone-400 p-1 text-left">Préstamo</th><th className="border border-stone-400 p-1 text-left">Cliente</th><th className="border border-stone-400 p-1 text-left">Estado</th><th className="border border-stone-400 p-1 text-right">Capital original</th><th className="border border-stone-400 p-1 text-right">Total pactado</th><th className="border border-stone-400 p-1 text-right">Pagado acumulado</th><th className="border border-stone-400 p-1 text-right">Saldo pendiente</th><th className="border border-stone-400 p-1 text-right">Vencido</th></tr></thead>
+              <tbody>{filteredRows.map((row) => <tr key={`print-${row.prestamo.id}`}><td className="border border-stone-300 p-1">{formatLoanNumber(row.prestamo.numero, row.prestamo.id)}</td><td className="border border-stone-300 p-1">{row.prestamo.cliente?.nombre ?? "Cliente no disponible"}</td><td className="border border-stone-300 p-1">{row.prestamo.estado}</td><td className="border border-stone-300 p-1 text-right">{formatMoney("L", row.prestamo.monto)}</td><td className="border border-stone-300 p-1 text-right">{formatMoney("L", row.totalPactado)}</td><td className="border border-stone-300 p-1 text-right">{formatMoney("L", row.pagado)}</td><td className="border border-stone-300 p-1 text-right">{formatMoney("L", row.pendiente)}</td><td className="border border-stone-300 p-1 text-right">{formatMoney("L", row.vencido)}</td></tr>)}</tbody>
             </table>
             <section className="break-before-page">
-              <h2 className="mb-2 text-base font-bold">Cobros del período ({report.payments.length})</h2>
+              <h2 className="mb-2 text-base font-bold">Cobros del período para la cartera filtrada ({filteredPayments.length})</h2>
               <table className="w-full border-collapse text-[9px]">
                 <thead><tr className="bg-stone-100"><th className="border border-stone-400 p-1 text-left">Recibo</th><th className="border border-stone-400 p-1 text-left">Fecha</th><th className="border border-stone-400 p-1 text-left">Cliente</th><th className="border border-stone-400 p-1 text-left">Préstamo</th><th className="border border-stone-400 p-1 text-right">Monto</th></tr></thead>
-                <tbody>{report.payments.map((payment) => <tr key={`print-payment-${payment.id}`}><td className="border border-stone-300 p-1">{formatPaymentNumber(payment.numero_recibo, payment.recibo)}</td><td className="border border-stone-300 p-1">{formatDate(payment.fecha)}</td><td className="border border-stone-300 p-1">{payment.prestamo?.cliente?.nombre ?? "Cliente no disponible"}</td><td className="border border-stone-300 p-1">{payment.prestamo ? formatLoanNumber(payment.prestamo.numero, payment.prestamo.id) : "—"}</td><td className="border border-stone-300 p-1 text-right">{formatMoney("L", payment.monto)}</td></tr>)}</tbody>
+                <tbody>{filteredPayments.map((payment) => <tr key={`print-payment-${payment.id}`}><td className="border border-stone-300 p-1">{formatPaymentNumber(payment.numero_recibo, payment.recibo)}</td><td className="border border-stone-300 p-1">{formatDate(payment.fecha)}</td><td className="border border-stone-300 p-1">{payment.prestamo?.cliente?.nombre ?? "Cliente no disponible"}</td><td className="border border-stone-300 p-1">{payment.prestamo ? formatLoanNumber(payment.prestamo.numero, payment.prestamo.id) : "—"}</td><td className="border border-stone-300 p-1 text-right">{formatMoney("L", payment.monto)}</td></tr>)}</tbody>
               </table>
             </section>
             <p className="mt-3 text-[9px]">El interés cobrado es una estimación proporcional. La mora diaria monetaria permanece desactivada.</p>
           </div>
 
           <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 xl:grid-cols-3 print:hidden">
-            <MetricCard label="Capital prestado" value={formatMoney("L", report.totals.capitalPrestado)} detail={`${report.rows.length - report.totals.cancelados} préstamo(s) no cancelados`} icon={HandCoins} tone="primary" />
-            <MetricCard label="Por cobrar" value={formatMoney("L", report.totals.porCobrar)} detail="Saldo de cartera vigente" icon={Landmark} tone="info" />
-            <MetricCard label="Vencido" value={formatMoney("L", report.totals.vencido)} detail={`${report.totals.morosos} préstamo(s) en mora`} icon={AlertTriangle} tone={report.totals.morosos ? "danger" : "success"} />
-            <MetricCard label="Cobrado en período" value={formatMoney("L", report.totals.cobradoPeriodo)} detail={`${report.payments.length} pago(s)`} icon={TrendingUp} tone="success" />
-            <MetricCard label="Interés pactado" value={formatMoney("L", report.totals.interesPactado)} detail="Interés fijo total de la cartera" icon={Percent} tone="warning" />
-            <MetricCard label="Interés cobrado estimado" value={formatMoney("L", report.totals.interesCobradoEstimado)} detail="Proporcional a lo pagado" icon={Banknote} tone="info" />
+            <MetricCard label="Capital original prestado" value={formatMoney("L", filteredTotals.capitalPrestado)} detail={`${filteredRows.length - filteredTotals.cancelados} préstamo(s) no cancelados`} icon={HandCoins} tone="primary" />
+            <MetricCard label="Saldo pendiente actual" value={formatMoney("L", filteredTotals.porCobrar)} detail="Resto del total pactado (capital + interés)" icon={Landmark} tone="info" />
+            <MetricCard label="Saldo vencido" value={formatMoney("L", filteredTotals.vencido)} detail={`${filteredTotals.morosos} préstamo(s) en mora`} icon={AlertTriangle} tone={filteredTotals.morosos ? "danger" : "success"} />
+            <MetricCard label="Cobrado en período" value={formatMoney("L", filteredTotals.cobradoPeriodo)} detail={`${filteredPayments.length} pago(s) de la cartera filtrada`} icon={TrendingUp} tone="success" />
+            <MetricCard label="Interés pactado" value={formatMoney("L", filteredTotals.interesPactado)} detail="Interés fijo total de la cartera filtrada" icon={Percent} tone="warning" />
+            <MetricCard label="Interés cobrado estimado" value={formatMoney("L", filteredTotals.interesCobradoEstimado)} detail="Proporcional a lo pagado" icon={Banknote} tone="info" />
           </div>
+
+          {isAdmin ? (
+            <MasterAssignmentSummary
+              profiles={team}
+              reportRows={report.rows}
+              onViewPortfolio={(id) => {
+                setPrestamistaId(id);
+                setStatus("todos");
+                setSearch("");
+                setPage(1);
+              }}
+            />
+          ) : null}
 
           <Card className="space-y-4 p-4 print:hidden sm:p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div><h2 className="font-bold text-pf-text">Estado de la cartera</h2><p className="mt-1 text-xs text-pf-muted">{filteredRows.length} préstamo(s) según el filtro actual.</p></div>
-              <div className="flex flex-wrap gap-1.5"><span className="pf-filter-chip">{report.totals.activos} activos</span><span className="pf-filter-chip">{report.totals.pagados} pagados</span><span className="pf-filter-chip">{report.totals.cancelados} cancelados</span></div>
+              <div className="flex flex-wrap gap-1.5"><span className="pf-filter-chip">{filteredTotals.activos} activos</span><span className="pf-filter-chip">{filteredTotals.pagados} pagados</span><span className="pf-filter-chip">{filteredTotals.cancelados} cancelados</span></div>
             </div>
             {filteredRows.length === 0 ? <EmptyState title="No hay préstamos para este filtro" description="Cambie el estado o el texto de búsqueda." icon={<Landmark className="h-5 w-5" strokeWidth={2} aria-hidden />} /> : (
               <>
@@ -248,8 +305,8 @@ export function ReportsPage() {
           </Card>
 
           <Card className="space-y-4 p-4 print:hidden sm:p-5">
-            <div><h2 className="font-bold text-pf-text">Cobros del período</h2><p className="mt-1 text-xs text-pf-muted">Del {formatDateOnly(report.desde)} al {formatDateOnly(report.hasta)}.</p></div>
-            {report.payments.length === 0 ? <EmptyState title="No hubo cobros en este período" icon={<ReceiptText className="h-5 w-5" strokeWidth={2} aria-hidden />} /> : <div className="space-y-2">{report.payments.slice(0, 10).map((payment) => <button key={payment.id} type="button" className="flex w-full flex-col gap-2 rounded-xl border border-pf-border-soft bg-pf-surface-elevated p-3 text-left sm:flex-row sm:items-center sm:justify-between" onClick={() => navigate(`/pagos/${payment.id}/recibo`)}><span className="min-w-0"><strong className="block font-mono text-xs text-pf-primary-hover">{formatPaymentNumber(payment.numero_recibo, payment.recibo)}</strong><span className="mt-0.5 block truncate text-sm font-bold text-pf-text">{payment.prestamo?.cliente?.nombre ?? "Cliente no disponible"}</span><span className="block text-xs text-pf-muted">{formatDate(payment.fecha)}</span></span><strong className="whitespace-nowrap text-lg tabular-nums text-pf-success">{formatMoney("L", payment.monto)}</strong></button>)}{report.payments.length > 10 ? <Button type="button" variant="secondary" className="w-full print:hidden" onClick={() => navigate("/pagos")}>Ver todos los pagos</Button> : null}</div>}
+            <div><h2 className="font-bold text-pf-text">Cobros del período</h2><p className="mt-1 text-xs text-pf-muted">Del {formatDateOnly(report.desde)} al {formatDateOnly(report.hasta)} para la cartera filtrada.</p></div>
+            {filteredPayments.length === 0 ? <EmptyState title="No hubo cobros para esta cartera en el período" icon={<ReceiptText className="h-5 w-5" strokeWidth={2} aria-hidden />} /> : <div className="space-y-2">{filteredPayments.slice(0, 10).map((payment) => <button key={payment.id} type="button" className="flex w-full flex-col gap-2 rounded-xl border border-pf-border-soft bg-pf-surface-elevated p-3 text-left sm:flex-row sm:items-center sm:justify-between" onClick={() => navigate(`/pagos/${payment.id}/recibo`)}><span className="min-w-0"><strong className="block font-mono text-xs text-pf-primary-hover">{formatPaymentNumber(payment.numero_recibo, payment.recibo)}</strong><span className="mt-0.5 block truncate text-sm font-bold text-pf-text">{payment.prestamo?.cliente?.nombre ?? "Cliente no disponible"}</span><span className="block text-xs text-pf-muted">{formatDate(payment.fecha)}</span></span><strong className="whitespace-nowrap text-lg tabular-nums text-pf-success">{formatMoney("L", payment.monto)}</strong></button>)}{filteredPayments.length > 10 ? <Button type="button" variant="secondary" className="w-full print:hidden" onClick={() => navigate("/pagos")}>Ver todos los pagos</Button> : null}</div>}
           </Card>
 
           <p className="px-1 text-xs leading-relaxed text-pf-muted print:hidden">El interés cobrado es una estimación proporcional al avance del préstamo. La mora diaria monetaria continúa desactivada, tal como se acordó para esta etapa.</p>

@@ -3,6 +3,7 @@ import { useAuth } from "../auth/AuthContext";
 import {
   listOfflineOperations,
   isNetworkFailure,
+  isOfflineAccessInvalid,
   removeOfflineOperation,
   setOfflineUserScope,
   setPreferOfflineCache,
@@ -10,7 +11,11 @@ import {
   type OfflineOperation,
 } from "../lib/offlineDb";
 import { retryOfflineOperation, syncOfflineOperations } from "../lib/offlineSyncService";
-import { isOfflineWorkspacePrepared, prepareOfflineWorkspace } from "../lib/offlineWorkspace";
+import {
+  isOfflineWorkspacePrepared,
+  OFFLINE_WORKSPACE_MANIFEST_CACHE_KEY,
+  prepareOfflineWorkspace,
+} from "../lib/offlineWorkspace";
 import { withOnlineDeadline } from "../lib/networkRequest";
 import { supabase } from "../lib/supabase";
 
@@ -119,6 +124,13 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
     }
     if (!hasSession) {
       setError("Estamos validando la sesión antes de enviar los cambios. Si continúa, vuelva a iniciar sesión con Internet.");
+      return;
+    }
+    if (isOfflineAccessInvalid(userId)) {
+      // ProfileContext está renovando el rol/empresa. No se descarga ni se
+      // publica una copia hasta que el perfil autoritativo retire el marcador.
+      setPrepared(false);
+      await refreshCounts().catch(() => undefined);
       return;
     }
     if (runningRef.current) return runningRef.current;
@@ -258,9 +270,14 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
     if (userId && hasSession && navigator.onLine) void syncNow();
   }, [hasSession, syncNow, userId]);
 
-  useEffect(() => subscribeOfflineChanges(() => {
+  useEffect(() => subscribeOfflineChanges((change) => {
+    if (change.scope !== userId) return;
     void refreshCounts().catch(() => undefined);
-  }), [refreshCounts]);
+    if (change.area === "cache"
+      && (!change.key || change.key === OFFLINE_WORKSPACE_MANIFEST_CACHE_KEY)) {
+      void isOfflineWorkspacePrepared().then(setPrepared).catch(() => setPrepared(false));
+    }
+  }), [refreshCounts, userId]);
 
   useEffect(() => {
     const handleOnline = () => {

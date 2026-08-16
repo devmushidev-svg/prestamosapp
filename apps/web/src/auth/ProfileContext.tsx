@@ -1,7 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "./AuthContext";
 import { supabase } from "../lib/supabase";
-import { isNetworkFailure, readCache, writeCache } from "../lib/offlineDb";
+import {
+  clearOfflineCache,
+  getOfflineAccessEpoch,
+  invalidateOfflineAccess,
+  isNetworkFailure,
+  isOfflineAccessInvalid,
+  readCache,
+  restoreOfflineAccess,
+  writeCache,
+} from "../lib/offlineDb";
 import type { Profile } from "../types";
 
 type ProfileStatus =
@@ -24,7 +33,7 @@ type ProfileState = {
   status: ProfileStatus;
   error: string;
   isAdmin: boolean;
-  reload: () => Promise<void>;
+  reload: (options?: { silent?: boolean; recoverInvalidAccess?: boolean }) => Promise<void>;
 };
 
 const ProfileContext = createContext<ProfileState | null>(null);
@@ -39,6 +48,13 @@ function statusFor(cached: CachedProfile): ProfileStatus {
   return cached.companyActive ? "ready" : "company_inactive";
 }
 
+function hasSameProfileAccess(left: Profile, right: Profile): boolean {
+  return left.id === right.id
+    && left.empresa_id === right.empresa_id
+    && left.rol === right.rol
+    && left.activo === right.activo;
+}
+
 async function readCachedProfile(userId: string): Promise<CachedProfile | null> {
   const cached = await readCache<CachedProfile>(PROFILE_CACHE_KEY).catch(() => undefined);
   return cached?.profile.id === userId ? cached : null;
@@ -50,13 +66,33 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<ProfileStatus>("loading");
   const [error, setError] = useState("");
   const requestIdRef = useRef(0);
+  const profileRef = useRef<Profile | null>(null);
 
-  const reload = useCallback(async () => {
+  useEffect(() => {
+    profileRef.current = profile;
+  }, [profile]);
+
+  const reload = useCallback(async (options: { silent?: boolean; recoverInvalidAccess?: boolean } = {}) => {
     const requestId = ++requestIdRef.current;
+    let verifiedProfile: Profile | null = null;
+    let verifiedAccess: CachedProfile | null = null;
+    let accessChanged = Boolean(user && isOfflineAccessInvalid(user.id));
+    let accessEpoch = user && accessChanged ? getOfflineAccessEpoch(user.id) : 0;
+    let cachePurged = false;
+    const inMemoryProfile = profileRef.current;
     if (!user) {
       if (requestId !== requestIdRef.current) return;
       setProfile(null);
       setStatus(authLoading ? "loading" : "ready");
+      setError("");
+      return;
+    }
+    if (accessChanged && !options.recoverInvalidAccess) {
+      // Otra pestaña puede seguir ejecutando el RPC. Hasta que la pestaña que
+      // inició el cambio retire el marcador, ninguna otra debe restaurarlo con
+      // el rol anterior que todavía pudiera responder el servidor.
+      setProfile(null);
+      setStatus("loading");
       setError("");
       return;
     }
@@ -77,8 +113,27 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       }
       return;
     }
-    setStatus("loading");
-    setError("");
+    if (accessChanged) {
+      // Otra pestaña pudo iniciar la transferencia. Oculta de inmediato las
+      // vistas ya cargadas hasta confirmar el nuevo alcance en el servidor.
+      setProfile(null);
+      setStatus("loading");
+      setError("");
+    } else if (!options.silent) {
+      setStatus("loading");
+      setError("");
+    }
+    const invalidateAndPurge = async () => {
+      accessChanged = true;
+      if (!isOfflineAccessInvalid(user.id)) {
+        accessEpoch = invalidateOfflineAccess(user.id);
+      } else {
+        accessEpoch = getOfflineAccessEpoch(user.id);
+      }
+      if (cachePurged) return;
+      await clearOfflineCache();
+      cachePurged = true;
+    };
     try {
       const { data, error: queryError } = await supabase
         .from("profiles")
@@ -87,20 +142,39 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
         .maybeSingle();
       if (requestId !== requestIdRef.current) return;
       if (queryError) {
-        if (isMissingProfilesSchema(queryError)) {
+        if (isMissingProfilesSchema(queryError) && !accessChanged) {
           setProfile(null);
           setStatus("missing_schema");
           return;
         }
         throw queryError;
       }
+      // Un marcador pendiente bloquea por diseño la lectura de la copia vieja.
+      // Si no existe, el perfil guardado permite detectar cambios remotos de
+      // empresa, rol o estado y retirar toda la cartera privilegiada.
+      const previousCached = accessChanged ? null : await readCachedProfile(user.id);
+      if (requestId !== requestIdRef.current) return;
       if (!data) {
+        await invalidateAndPurge();
         setProfile(null);
         setStatus("unassigned");
         setError("Su acceso todavía no está vinculado a una empresa.");
         return;
       }
       const nextProfile = data as Profile;
+      verifiedProfile = nextProfile;
+      const profileAccessChanged = Boolean(
+        (previousCached && !hasSameProfileAccess(previousCached.profile, nextProfile))
+        || (inMemoryProfile && !hasSameProfileAccess(inMemoryProfile, nextProfile)),
+      );
+      if (accessChanged || profileAccessChanged) {
+        setProfile(null);
+        setStatus("loading");
+        setError("");
+        // El rol/empresa/estado ya cambió en el servidor. Retira la copia
+        // privilegiada antes de cualquier otra consulta que pudiera fallar.
+        await invalidateAndPurge();
+      }
       const { data: company, error: companyError } = await supabase
         .from("empresas")
         .select("activo")
@@ -109,19 +183,46 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       if (requestId !== requestIdRef.current) return;
       if (companyError) throw companyError;
       if (!company) {
+        await invalidateAndPurge();
         setProfile(null);
         setStatus("unassigned");
         setError("La empresa asignada a su cuenta ya no existe.");
         return;
       }
       const cached = { profile: nextProfile, companyActive: Boolean(company.activo) } satisfies CachedProfile;
-      await writeCache(PROFILE_CACHE_KEY, cached).catch(() => undefined);
+      verifiedAccess = cached;
+      if (previousCached && previousCached.companyActive !== cached.companyActive) {
+        // La activación de la empresa también cambia el alcance de acceso.
+        await invalidateAndPurge();
+      }
+      if (accessChanged) {
+        await invalidateAndPurge();
+        if (requestId !== requestIdRef.current) return;
+        // Es la única escritura permitida mientras el marcador está activo:
+        // proviene de consultas online autoritativas y reemplaza el perfil
+        // anterior antes de volver a habilitar la copia offline.
+        await writeCache(PROFILE_CACHE_KEY, cached, user.id, { allowInvalidAccess: true });
+        if (requestId !== requestIdRef.current) return;
+        restoreOfflineAccess(user.id, accessEpoch);
+      } else {
+        // Si la copia no es crítica para un cambio de acceso, una falla local
+        // no debe impedir que la sesión online continúe funcionando.
+        await writeCache(PROFILE_CACHE_KEY, cached, user.id).catch(() => undefined);
+      }
       if (requestId !== requestIdRef.current) return;
       setProfile(nextProfile);
       setStatus(statusFor(cached));
       setError(cached.companyActive ? "" : "La empresa está desactivada.");
     } catch (cause) {
       if (requestId !== requestIdRef.current) return;
+      if (accessChanged) {
+        // No reutiliza un perfil/caché con privilegios antiguos si la limpieza
+        // local falló. Un nuevo intento online volverá a ejecutar la purga.
+        setProfile(verifiedAccess?.profile ?? verifiedProfile);
+        setStatus("error");
+        setError("Sus permisos cambiaron, pero no pudimos actualizar la copia local. Recargue con Internet.");
+        return;
+      }
       const cached = await readCachedProfile(user.id);
       if (requestId !== requestIdRef.current) return;
       if (cached) {
@@ -145,6 +246,49 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (!user || offlineSession) return;
+    let lastRefreshAt = 0;
+    const refreshProfile = () => {
+      if (!navigator.onLine || Date.now() - lastRefreshAt < 1_000) return;
+      lastRefreshAt = Date.now();
+      void reload({ silent: true });
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") refreshProfile();
+    };
+    window.addEventListener("focus", refreshProfile);
+    window.addEventListener("online", refreshProfile);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.removeEventListener("focus", refreshProfile);
+      window.removeEventListener("online", refreshProfile);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [offlineSession, reload, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    let wasBlocked = isOfflineAccessInvalid(user.id);
+    const handleStorage = () => {
+      if (isOfflineAccessInvalid(user.id)) {
+        wasBlocked = true;
+        setProfile(null);
+        setStatus("loading");
+        setError("");
+        return;
+      }
+      if (wasBlocked && !offlineSession && navigator.onLine) {
+        wasBlocked = false;
+        void reload({ silent: true });
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, [offlineSession, reload, user]);
 
   // Sin la migración de usuarios aplicada todavía no hay tabla `profiles`:
   // se mantiene el comportamiento previo (una sola cuenta maestra implícita)
