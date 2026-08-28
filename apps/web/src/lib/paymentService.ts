@@ -71,6 +71,10 @@ function isMissingRpc(error: { code?: string }) {
   return error.code === "PGRST202" || error.code === "42883";
 }
 
+function isPermissionDenied(error: { code?: string; message?: string }) {
+  return error.code === "42501" || (error.message ?? "").toLowerCase().includes("row-level security");
+}
+
 function isMissingPaymentMigration(error: { code?: string }) {
   return ["PGRST205", "42P01", "PGRST204", "42703", "PGRST200"].includes(error.code ?? "");
 }
@@ -265,6 +269,7 @@ export async function registerPayment(input: {
   }
   if (error && isNetworkFailure(error)) return saveProvisionalPayment(input);
   if (error && isMissingRpc(error)) throw new Error("Falta aplicar la actualización de pagos en Supabase.");
+  if (error && isPermissionDenied(error)) throw new Error("No tiene permiso para registrar cobros.");
   if (error) throw new Error(error.message);
   throw new Error("Supabase devolvió una respuesta inesperada. No se reintentó para evitar duplicados.");
 }

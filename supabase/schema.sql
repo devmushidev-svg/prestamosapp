@@ -2026,6 +2026,442 @@ $$;
 revoke all on function public.actualizar_estados_cartera() from public, anon;
 grant execute on function public.actualizar_estados_cartera() to authenticated;
 
+-- ============================================================
+-- Permisos individuales por usuario (más allá de admin/prestamista)
+-- ============================================================
+-- Catálogo fijo de acciones reales de la aplicación. La cuenta maestra
+-- (`is_admin()`) siempre tiene acceso completo y nunca depende de estas
+-- filas; estas solo limitan a los usuarios no-admin.
+create table if not exists permissions (
+  code text primary key,
+  etiqueta text not null,
+  descripcion text,
+  orden smallint not null default 0
+);
+
+insert into permissions (code, etiqueta, descripcion, orden) values
+  ('prestamos.solicitar', 'Solicitar préstamo', 'Enviar una solicitud de préstamo para que la apruebe la cuenta maestra.', 10),
+  ('prestamos.crear', 'Crear préstamo directamente', 'Crear el préstamo ya aprobado, sin pasar por una solicitud.', 20),
+  ('pagos.registrar', 'Cobrar (registrar pagos)', 'Registrar abonos/pagos de los clientes de su cartera.', 30),
+  ('pagos.solicitar_cancelacion', 'Solicitar cancelación de abono', 'Pedir a la cuenta maestra que anule un pago ya registrado.', 40),
+  ('pagos.cancelar', 'Cancelar abonos directamente', 'Anular un pago ya registrado sin pasar por una solicitud.', 50),
+  ('clientes.crear', 'Crear clientes', 'Dar de alta nuevos clientes en su cartera.', 60),
+  ('clientes.editar', 'Editar clientes', 'Modificar los datos y el estado de sus clientes.', 70),
+  ('reportes.ver', 'Ver reportes', 'Acceder a la sección de reportes de cartera y cobros.', 80),
+  ('caja.cierre', 'Hacer cierres de caja', 'Registrar el cierre de caja diario con lo cobrado y lo declarado.', 90)
+on conflict (code) do update set
+  etiqueta = excluded.etiqueta,
+  descripcion = excluded.descripcion,
+  orden = excluded.orden;
+
+create table if not exists user_permissions (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  empresa_id uuid not null,
+  permission_code text not null references permissions(code),
+  creado_por uuid references profiles(id),
+  creado_en timestamptz not null default now(),
+  unique (profile_id, permission_code)
+);
+create index if not exists idx_user_permissions_profile on user_permissions (profile_id);
+create index if not exists idx_user_permissions_empresa on user_permissions (empresa_id);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'user_permissions_profile_empresa_fk' and conrelid = 'public.user_permissions'::regclass
+  ) then
+    alter table user_permissions add constraint user_permissions_profile_empresa_fk
+      foreign key (profile_id, empresa_id) references profiles(id, empresa_id);
+  end if;
+end $$;
+
+-- Backfill de una sola vez: las instalaciones existentes tenían, en la
+-- práctica, todos los permisos (no existía ninguna restricción). Se
+-- conserva ese comportamiento para no romper cuentas ya invitadas; el admin
+-- puede recortarlas después desde Usuarios. Solo corre si la tabla está
+-- vacía, para no revertir ajustes que el admin ya haya hecho.
+do $$
+begin
+  if not exists (select 1 from user_permissions limit 1) then
+    insert into user_permissions (profile_id, empresa_id, permission_code, creado_por)
+    select p.id, p.empresa_id, perm.code, p.id
+    from profiles p
+    cross join permissions perm
+    where p.rol <> 'admin';
+  end if;
+end $$;
+
+alter table permissions enable row level security;
+alter table user_permissions enable row level security;
+
+drop policy if exists "permissions_select" on permissions;
+create policy "permissions_select" on permissions for select to authenticated using (true);
+revoke all on table permissions from anon;
+revoke insert, update, delete, truncate on table permissions from authenticated;
+grant select on table permissions to authenticated;
+
+drop policy if exists "user_permissions_select" on user_permissions;
+drop policy if exists "user_permissions_write" on user_permissions;
+create policy "user_permissions_select" on user_permissions for select to authenticated
+  using (profile_id = auth.uid() or (empresa_id = public.current_empresa_id() and public.is_admin()));
+create policy "user_permissions_write" on user_permissions for all to authenticated
+  using (empresa_id = public.current_empresa_id() and public.is_admin())
+  with check (empresa_id = public.current_empresa_id() and public.is_admin());
+revoke all on table user_permissions from anon;
+grant select, insert, update, delete on table user_permissions to authenticated;
+
+-- Única fuente de verdad para "¿puede este usuario hacer X?": la usan tanto
+-- las políticas RLS de abajo como los RPC (registrar_pago, etc.), así que un
+-- usuario sin el permiso no puede ejecutar la acción ni por la interfaz ni
+-- llamando el RPC/la tabla directamente.
+create or replace function public.has_permission(p_code text)
+returns boolean
+language sql
+security definer
+stable
+set search_path = ''
+as $$
+  select
+    public.is_admin()
+    or exists (
+      select 1
+      from public.user_permissions up
+      join public.profiles p on p.id = up.profile_id
+      join public.empresas e on e.id = p.empresa_id
+      where up.profile_id = auth.uid()
+        and up.permission_code = p_code
+        and p.activo
+        and e.activo
+    );
+$$;
+
+revoke all on function public.has_permission(text) from public, anon;
+grant execute on function public.has_permission(text) to authenticated;
+
+-- Permisos concedidos explícitamente al usuario actual (sin incluir el
+-- comodín de admin); la interfaz la usa para pintar navegación y formularios.
+create or replace function public.mis_permisos()
+returns text[]
+language sql
+security definer
+stable
+set search_path = ''
+as $$
+  select coalesce(array_agg(up.permission_code order by up.permission_code), array[]::text[])
+  from public.user_permissions up
+  where up.profile_id = auth.uid();
+$$;
+
+revoke all on function public.mis_permisos() from public, anon;
+grant execute on function public.mis_permisos() to authenticated;
+
+-- Reemplaza de una vez todos los permisos de un usuario no-admin. Solo la
+-- cuenta maestra puede llamarla; valida empresa y códigos antes de escribir.
+create or replace function public.set_user_permissions(
+  p_profile_id uuid,
+  p_codes text[]
+)
+returns void
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_empresa_id uuid;
+  v_target_rol text;
+begin
+  if not public.is_admin() then
+    raise exception using message = 'Solo un administrador puede modificar los permisos.', errcode = '42501';
+  end if;
+  v_empresa_id := public.current_empresa_id();
+
+  select rol into v_target_rol
+  from public.profiles
+  where id = p_profile_id and empresa_id = v_empresa_id;
+  if not found then
+    raise exception using message = 'El usuario indicado no existe o no pertenece a su empresa.', errcode = '23503';
+  end if;
+  if v_target_rol = 'admin' then
+    raise exception using message = 'La cuenta maestra ya tiene acceso completo; no necesita permisos individuales.', errcode = '23514';
+  end if;
+  if p_codes is not null and exists (
+    select 1 from unnest(p_codes) as code where code not in (select code from public.permissions)
+  ) then
+    raise exception using message = 'Hay un permiso desconocido en la lista.', errcode = '23514';
+  end if;
+
+  delete from public.user_permissions
+  where profile_id = p_profile_id and empresa_id = v_empresa_id;
+
+  insert into public.user_permissions (profile_id, empresa_id, permission_code, creado_por)
+  select p_profile_id, v_empresa_id, code, auth.uid()
+  from unnest(coalesce(p_codes, array[]::text[])) as code;
+end;
+$$;
+
+revoke all on function public.set_user_permissions(uuid, text[]) from public, anon;
+grant execute on function public.set_user_permissions(uuid, text[]) to authenticated;
+
+-- Refuerzo en la base para las dos acciones reales que hoy podía ejecutar
+-- cualquier prestamista: crear un préstamo directo y registrar un cobro.
+-- Son políticas RESTRICTIVE (se combinan con AND sobre las políticas
+-- permisivas ya existentes) para no reescribir `prestamos_insert`/`pagos_all`.
+drop policy if exists "prestamos_insert_permiso" on prestamos;
+create policy "prestamos_insert_permiso" on prestamos as restrictive for insert to authenticated
+  with check (public.has_permission('prestamos.crear'));
+
+drop policy if exists "pagos_insert_permiso" on pagos;
+create policy "pagos_insert_permiso" on pagos as restrictive for insert to authenticated
+  with check (public.has_permission('pagos.registrar'));
+
+-- ============================================================
+-- Solicitudes (aprobación previa de la cuenta maestra)
+-- ============================================================
+-- Tabla genérica y extensible: hoy cubre 'prestamo' y 'cancelacion_pago';
+-- un tipo futuro solo necesita un nuevo valor de `tipo`, su propio `datos`
+-- y su propio RPC de creación/resolución. El historial nunca se borra.
+create table if not exists solicitudes (
+  id uuid primary key default gen_random_uuid(),
+  empresa_id uuid not null references empresas(id),
+  tipo text not null check (tipo in ('prestamo', 'cancelacion_pago')),
+  solicitante_id uuid not null,
+  estado text not null default 'pendiente'
+    check (estado in ('pendiente', 'aprobada', 'rechazada')),
+  -- Datos propios de cada tipo de solicitud (para 'prestamo': clienteId,
+  -- monto, tasaInteres, plazo, frecuencia, fechaInicio, diaPagoSemana).
+  datos jsonb not null,
+  motivo_solicitud text,
+  motivo_resolucion text,
+  resuelto_por uuid references profiles(id),
+  resuelto_en timestamptz,
+  prestamo_resultante_id uuid references prestamos(id),
+  pago_afectado_id uuid references pagos(id),
+  creado_en timestamptz not null default now()
+);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'solicitudes_solicitante_empresa_fk' and conrelid = 'public.solicitudes'::regclass
+  ) then
+    alter table solicitudes add constraint solicitudes_solicitante_empresa_fk
+      foreign key (solicitante_id, empresa_id) references profiles(id, empresa_id);
+  end if;
+end $$;
+
+create index if not exists idx_solicitudes_empresa_estado on solicitudes (empresa_id, estado, creado_en desc);
+create index if not exists idx_solicitudes_solicitante on solicitudes (solicitante_id, creado_en desc);
+
+alter table solicitudes enable row level security;
+
+drop policy if exists "solicitudes_select" on solicitudes;
+drop policy if exists "solicitudes_insert" on solicitudes;
+drop policy if exists "solicitudes_update_admin" on solicitudes;
+create policy "solicitudes_select" on solicitudes for select to authenticated
+  using (solicitante_id = auth.uid() or (empresa_id = public.current_empresa_id() and public.is_admin()));
+-- El permiso exigido depende del tipo; un tipo futuro solo agrega un `or`.
+create policy "solicitudes_insert" on solicitudes for insert to authenticated
+  with check (
+    empresa_id = public.current_empresa_id()
+    and public.is_active_profile()
+    and solicitante_id = auth.uid()
+    and (
+      (tipo = 'prestamo' and public.has_permission('prestamos.solicitar'))
+      or (tipo = 'cancelacion_pago' and public.has_permission('pagos.solicitar_cancelacion'))
+    )
+  );
+create policy "solicitudes_update_admin" on solicitudes for update to authenticated
+  using (empresa_id = public.current_empresa_id() and public.is_admin())
+  with check (empresa_id = public.current_empresa_id() and public.is_admin());
+-- Sin política de DELETE: el historial de solicitudes se conserva siempre.
+revoke all on table solicitudes from anon;
+grant select, insert, update on table solicitudes to authenticated;
+
+-- Crea una solicitud de préstamo pendiente. No crea el préstamo: solo lo
+-- hace `resolver_solicitud_prestamo` al aprobar. `p_id` lo genera el cliente
+-- una sola vez por envío, así que reintentar/hacer doble clic siempre
+-- devuelve la misma solicitud en vez de crear una duplicada.
+create or replace function public.crear_solicitud_prestamo(
+  p_id uuid,
+  p_cliente_id uuid,
+  p_monto numeric,
+  p_tasa_interes numeric,
+  p_plazo integer,
+  p_frecuencia text,
+  p_fecha_inicio date,
+  p_dia_pago_semana smallint,
+  p_observaciones text
+)
+returns uuid
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_empresa_id uuid;
+  v_existing public.solicitudes%rowtype;
+  v_datos jsonb;
+begin
+  if p_id is null then
+    raise exception using message = 'La identificación de la solicitud es obligatoria.', errcode = '23502';
+  end if;
+  if not public.is_active_profile() then
+    raise exception using message = 'Su cuenta no está activa.', errcode = '42501';
+  end if;
+  if not public.has_permission('prestamos.solicitar') then
+    raise exception using message = 'No tiene permiso para solicitar préstamos.', errcode = '42501';
+  end if;
+  if p_cliente_id is null then
+    raise exception using message = 'El cliente es obligatorio.', errcode = '23502';
+  end if;
+  if p_monto is null or p_monto <= 0 or p_monto > 999999999999.99 or p_monto <> round(p_monto, 2) then
+    raise exception using message = 'El capital debe ser positivo y tener máximo dos decimales.', errcode = '23514';
+  end if;
+  if p_tasa_interes is null or p_tasa_interes < 0 or p_tasa_interes > 9999.99
+    or p_tasa_interes <> round(p_tasa_interes, 2) then
+    raise exception using message = 'La tasa debe estar entre 0 y 9999.99 y tener máximo dos decimales.', errcode = '23514';
+  end if;
+  if p_plazo is null or p_plazo < 1 or p_plazo > 600 then
+    raise exception using message = 'El plazo debe estar entre 1 y 600 cuotas.', errcode = '23514';
+  end if;
+  if p_frecuencia is null or p_frecuencia not in ('diario', 'semanal', 'quincenal', 'mensual') then
+    raise exception using message = 'La frecuencia no es válida.', errcode = '23514';
+  end if;
+  if p_fecha_inicio is null then
+    raise exception using message = 'La fecha de inicio es obligatoria.', errcode = '23502';
+  end if;
+  if p_frecuencia = 'semanal' and (p_dia_pago_semana is null or p_dia_pago_semana not between 1 and 6) then
+    raise exception using message = 'El día de cobro semanal debe estar entre lunes y sábado.', errcode = '23514';
+  elsif p_frecuencia <> 'semanal' and p_dia_pago_semana is not null then
+    raise exception using message = 'El día de cobro semanal solo aplica a préstamos semanales.', errcode = '23514';
+  end if;
+
+  v_empresa_id := public.current_empresa_id();
+  perform 1 from public.clientes where id = p_cliente_id and empresa_id = v_empresa_id;
+  if not found then
+    raise exception using message = 'El cliente no existe.', errcode = '23503';
+  end if;
+
+  v_datos := jsonb_build_object(
+    'clienteId', p_cliente_id,
+    'monto', p_monto,
+    'tasaInteres', p_tasa_interes,
+    'plazo', p_plazo,
+    'frecuencia', p_frecuencia,
+    'fechaInicio', p_fecha_inicio,
+    'diaPagoSemana', p_dia_pago_semana
+  );
+
+  insert into public.solicitudes (id, empresa_id, tipo, solicitante_id, datos, motivo_solicitud)
+  values (p_id, v_empresa_id, 'prestamo', auth.uid(), v_datos, nullif(btrim(p_observaciones), ''))
+  on conflict (id) do nothing;
+
+  select * into v_existing from public.solicitudes where id = p_id;
+  if not found then
+    raise exception using message = 'No se pudo confirmar la solicitud.', errcode = '40001';
+  end if;
+  -- Un reintento/doble clic con los mismos datos es idempotente; un `p_id`
+  -- reutilizado con datos distintos indica un error del cliente, no un reintento.
+  if v_existing.tipo <> 'prestamo' or v_existing.solicitante_id <> auth.uid() or v_existing.datos <> v_datos then
+    raise exception using message = 'La solicitud ya fue usada con datos diferentes.', errcode = '23505';
+  end if;
+  return v_existing.id;
+end;
+$$;
+
+revoke all on function public.crear_solicitud_prestamo(uuid, uuid, numeric, numeric, integer, text, date, smallint, text)
+  from public, anon;
+grant execute on function public.crear_solicitud_prestamo(uuid, uuid, numeric, numeric, integer, text, date, smallint, text)
+  to authenticated;
+
+-- Aprueba o rechaza una solicitud de préstamo pendiente. Solo un admin puede
+-- llamarla. El `for update` sobre la fila serializa dos resoluciones
+-- simultáneas: la segunda encuentra `estado <> 'pendiente'` y se detiene.
+-- Al aprobar, reutiliza `crear_prestamo_con_cuotas` con el mismo `id` de la
+-- solicitud como `solicitud_id`, así que ni un doble clic ni una segunda
+-- llamada pueden crear dos préstamos para la misma solicitud. El préstamo
+-- queda asignado al cobrador que lo solicitó, no a quien lo aprueba.
+create or replace function public.resolver_solicitud_prestamo(
+  p_solicitud_id uuid,
+  p_decision text,
+  p_motivo text
+)
+returns uuid
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_solicitud public.solicitudes%rowtype;
+  v_empresa_id uuid;
+  v_prestamo_id uuid;
+begin
+  if not public.is_admin() then
+    raise exception using message = 'Solo un administrador puede resolver solicitudes.', errcode = '42501';
+  end if;
+  if p_decision not in ('aprobada', 'rechazada') then
+    raise exception using message = 'La decisión no es válida.', errcode = '23514';
+  end if;
+  v_empresa_id := public.current_empresa_id();
+
+  select * into v_solicitud
+  from public.solicitudes
+  where id = p_solicitud_id and empresa_id = v_empresa_id and tipo = 'prestamo'
+  for update;
+  if not found then
+    raise exception using message = 'La solicitud no existe.', errcode = '23503';
+  end if;
+  if v_solicitud.estado <> 'pendiente' then
+    raise exception using message = 'Esta solicitud ya fue procesada.', errcode = '23514';
+  end if;
+
+  if p_decision = 'rechazada' then
+    update public.solicitudes
+    set estado = 'rechazada',
+        motivo_resolucion = nullif(btrim(p_motivo), ''),
+        resuelto_por = auth.uid(),
+        resuelto_en = now()
+    where id = p_solicitud_id;
+    return null;
+  end if;
+
+  v_prestamo_id := public.crear_prestamo_con_cuotas(
+    p_solicitud_id => p_solicitud_id,
+    p_cliente_id => (v_solicitud.datos->>'clienteId')::uuid,
+    p_monto => (v_solicitud.datos->>'monto')::numeric,
+    p_tasa_interes => (v_solicitud.datos->>'tasaInteres')::numeric,
+    p_plazo => (v_solicitud.datos->>'plazo')::integer,
+    p_frecuencia => v_solicitud.datos->>'frecuencia',
+    p_fecha_inicio => (v_solicitud.datos->>'fechaInicio')::date,
+    p_dia_pago_semana => nullif(v_solicitud.datos->>'diaPagoSemana', '')::smallint
+  );
+
+  -- `crear_prestamo_con_cuotas` asigna el préstamo a quien lo llama (el
+  -- admin) por el valor por defecto de la columna; se reasigna aquí al
+  -- cobrador que originó la solicitud, con la misma autoridad que ya tiene
+  -- `reasignar_prestamo`.
+  update public.prestamos
+  set prestamista_id = v_solicitud.solicitante_id
+  where id = v_prestamo_id and empresa_id = v_empresa_id;
+
+  update public.solicitudes
+  set estado = 'aprobada',
+      motivo_resolucion = nullif(btrim(p_motivo), ''),
+      resuelto_por = auth.uid(),
+      resuelto_en = now(),
+      prestamo_resultante_id = v_prestamo_id
+  where id = p_solicitud_id;
+
+  return v_prestamo_id;
+end;
+$$;
+
+revoke all on function public.resolver_solicitud_prestamo(uuid, text, text) from public, anon;
+grant execute on function public.resolver_solicitud_prestamo(uuid, text, text) to authenticated;
+
 notify pgrst, 'reload schema';
 
 commit;

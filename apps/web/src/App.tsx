@@ -27,6 +27,9 @@ const CobranzaClientePage = lazy(() => import("./pages/CobranzaClientePage").the
 const CobranzaAbonoPage = lazy(() => import("./pages/CobranzaAbonoPage").then((m) => ({ default: m.CobranzaAbonoPage })));
 const UsersPage = lazy(() => import("./pages/UsersPage").then((m) => ({ default: m.UsersPage })));
 const AccountPage = lazy(() => import("./pages/AccountPage").then((m) => ({ default: m.AccountPage })));
+const NewLoanRequestPage = lazy(() => import("./pages/NewLoanRequestPage").then((m) => ({ default: m.NewLoanRequestPage })));
+const MisSolicitudesPage = lazy(() => import("./pages/MisSolicitudesPage").then((m) => ({ default: m.MisSolicitudesPage })));
+const SolicitudesPage = lazy(() => import("./pages/SolicitudesPage").then((m) => ({ default: m.SolicitudesPage })));
 
 function RouteFallback() {
   return (
@@ -132,6 +135,38 @@ function RequireAdmin({ children, showAccessMessage = false }: { children: React
   return <>{children}</>;
 }
 
+/**
+ * Protege una ruta con un permiso puntual (no todo-o-nada como `RequireAdmin`).
+ * Es solo la primera línea de defensa: la RLS/RPC del servidor son las que de
+ * verdad impiden la operación aunque alguien llegue aquí sin este guard.
+ *
+ * `soloPrestamista`: para flujos de "solicitar" (piden aprobación de la
+ * cuenta maestra). El admin siempre cumple `hasPermission` porque tiene
+ * acceso total, pero no tiene sentido que "se solicite" algo a sí mismo, así
+ * que estas rutas se ocultan también para él.
+ */
+function RequirePermission({
+  code,
+  soloPrestamista = false,
+  children,
+}: {
+  code: string;
+  soloPrestamista?: boolean;
+  children: ReactNode;
+}) {
+  const { status, hasPermission, isAdmin } = useProfile();
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-pf-surface text-pf-muted">
+        Cargando…
+      </div>
+    );
+  }
+  if (soloPrestamista && isAdmin) return <Navigate to="/" replace />;
+  if (!hasPermission(code)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -165,16 +200,19 @@ export default function App() {
         <Route path="clientes" element={<CustomersPage />} />
         <Route path="clientes/:customerId/estado-cuenta" element={<CustomerStatementPage />} />
         <Route path="prestamos" element={<LoansPage />} />
-        <Route path="prestamos/nuevo" element={<NewLoanPage />} />
+        <Route path="prestamos/nuevo" element={<RequirePermission code="prestamos.crear"><NewLoanPage /></RequirePermission>} />
+        <Route path="prestamos/solicitar" element={<RequirePermission code="prestamos.solicitar" soloPrestamista><NewLoanRequestPage /></RequirePermission>} />
+        <Route path="prestamos/mis-solicitudes" element={<RequirePermission code="prestamos.solicitar" soloPrestamista><MisSolicitudesPage /></RequirePermission>} />
         <Route path="prestamos/:loanId" element={<LoanDetailPage />} />
         <Route path="configuracion" element={<RequireAdmin><BusinessSettingsPage /></RequireAdmin>} />
         <Route path="configuracion/usuarios" element={<RequireAdmin><UsersPage /></RequireAdmin>} />
+        <Route path="solicitudes" element={<RequireAdmin><SolicitudesPage /></RequireAdmin>} />
         <Route path="perfil" element={<AccountPage />} />
         <Route path="cobranza" element={<RutaCobroPage />} />
         <Route path="cobranza/:clienteId" element={<CobranzaClientePage />} />
-        <Route path="cobranza/:clienteId/abono" element={<CobranzaAbonoPage />} />
+        <Route path="cobranza/:clienteId/abono" element={<RequirePermission code="pagos.registrar"><CobranzaAbonoPage /></RequirePermission>} />
         <Route path="pagos" element={<PaymentsPage />} />
-        <Route path="pagos/nuevo" element={<NewPaymentPage />} />
+        <Route path="pagos/nuevo" element={<RequirePermission code="pagos.registrar"><NewPaymentPage /></RequirePermission>} />
         <Route path="pagos/:paymentId/recibo" element={<PaymentReceiptPage />} />
         <Route path="agenda" element={<AgendaPage />} />
         <Route path="reportes" element={<ReportsPage />} />

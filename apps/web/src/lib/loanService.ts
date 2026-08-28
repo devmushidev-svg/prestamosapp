@@ -219,6 +219,10 @@ function isMissingCreateLoanRpc(error: { code?: string; message?: string }): boo
   return error.code === "PGRST202" || error.code === "42883";
 }
 
+function isPermissionDenied(error: { code?: string; message?: string }): boolean {
+  return error.code === "42501" || (error.message ?? "").toLowerCase().includes("row-level security");
+}
+
 export async function createFixedLoan(
   input: CreateFixedLoanInput
 ): Promise<{ id: string; calculation: FixedLoanCalculation }> {
@@ -312,6 +316,9 @@ export async function createFixedLoan(
   }
   if (error && isMissingCreateLoanRpc(error)) {
     throw new Error("Falta aplicar la actualización de planes comerciales en Supabase.");
+  }
+  if (error && isPermissionDenied(error)) {
+    throw new Error("No tiene permiso para crear préstamos directamente.");
   }
   if (error) throw error;
   throw new Error("Supabase devolvió una respuesta inesperada. No se reintentó para evitar duplicados.");

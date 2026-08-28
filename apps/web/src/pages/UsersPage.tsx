@@ -6,16 +6,20 @@ import { PageHero } from "../components/PageHero";
 import { Button, Card, EmptyState, Field, Input, Modal, Select } from "../components/ui";
 import { useOffline } from "../offline/OfflineContext";
 import {
+  DEFAULT_PERMISSION_CODES,
+  getUserPermissionCodes,
   inviteUser,
+  listPermissions,
   listUsers,
   MasterTransferError,
   setUserActive,
+  setUserPermissions,
   transferMasterAccount,
   updateUser,
   type InviteUserInput,
   type UpdateUserInput,
 } from "../lib/userService";
-import type { Profile, Rol } from "../types";
+import type { Permission, Profile, Rol } from "../types";
 
 const ROL_LABELS: Record<Rol, string> = {
   admin: "Cuenta maestra",
@@ -25,8 +29,87 @@ const ROL_LABELS: Record<Rol, string> = {
   supervisor: "Supervisor",
 };
 
-const EMPTY_INVITE: InviteUserInput = { nombre: "", apellido: "", email: "", telefono: "", rol: "prestamista" };
+const EMPTY_INVITE: InviteUserInput = {
+  nombre: "",
+  apellido: "",
+  email: "",
+  telefono: "",
+  rol: "prestamista",
+  permisos: DEFAULT_PERMISSION_CODES,
+};
 const EMPTY_EDIT: UpdateUserInput = { nombre: "", apellido: "", telefono: "", rol: "prestamista" };
+
+function PermissionsChecklist({
+  catalog,
+  catalogError,
+  selected,
+  onChange,
+  disabled,
+  loading,
+}: {
+  catalog: Permission[];
+  catalogError: string;
+  selected: string[];
+  onChange: (codes: string[]) => void;
+  disabled?: boolean;
+  loading?: boolean;
+}) {
+  const selectedSet = new Set(selected);
+  function toggle(code: string) {
+    onChange(selectedSet.has(code) ? selected.filter((item) => item !== code) : [...selected, code]);
+  }
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-bold text-pf-text">Permisos y accesos</p>
+        <div className="flex shrink-0 gap-3">
+          <button
+            type="button"
+            className="text-xs font-semibold text-pf-primary-hover underline underline-offset-2 disabled:opacity-50"
+            disabled={disabled || loading || catalog.length === 0}
+            onClick={() => onChange(catalog.map((item) => item.code))}
+          >
+            Todos
+          </button>
+          <button
+            type="button"
+            className="text-xs font-semibold text-pf-muted underline underline-offset-2 disabled:opacity-50"
+            disabled={disabled || loading || catalog.length === 0}
+            onClick={() => onChange([])}
+          >
+            Ninguno
+          </button>
+        </div>
+      </div>
+      {loading ? (
+        <p className="rounded-xl border border-pf-border-soft p-3 text-center text-xs text-pf-muted">Cargando permisos…</p>
+      ) : catalogError ? (
+        <p className="rounded-xl border border-pf-danger-soft bg-pf-danger-soft/30 p-3 text-xs font-medium text-pf-danger">{catalogError}</p>
+      ) : (
+        <div className="max-h-64 space-y-1 overflow-y-auto rounded-xl border border-pf-border-soft p-2">
+          {catalog.map((permission) => (
+            <label
+              key={permission.code}
+              className="flex cursor-pointer items-start gap-3 rounded-lg px-2 py-1.5 text-sm hover:bg-pf-surface-soft"
+            >
+              <input
+                type="checkbox"
+                className="mt-0.5 size-4 shrink-0 accent-pf-primary"
+                checked={selectedSet.has(permission.code)}
+                disabled={disabled}
+                onChange={() => toggle(permission.code)}
+              />
+              <span className="min-w-0">
+                <span className="block font-semibold text-pf-text">{permission.etiqueta}</span>
+                {permission.descripcion ? <span className="block text-xs text-pf-muted">{permission.descripcion}</span> : null}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 const TRANSFER_NOTICE_KEY = "multiprestamos.master-transfer-notice";
 
 function saveTransferNotice(message: string) {
@@ -81,6 +164,10 @@ export function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [listErr, setListErr] = useState("");
 
+  const [permissionsCatalog, setPermissionsCatalog] = useState<Permission[]>([]);
+  const [permissionsCatalogErr, setPermissionsCatalogErr] = useState("");
+  const [permissionsCatalogLoading, setPermissionsCatalogLoading] = useState(true);
+
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteForm, setInviteForm] = useState<InviteUserInput>(EMPTY_INVITE);
   const [inviteErr, setInviteErr] = useState("");
@@ -89,6 +176,8 @@ export function UsersPage() {
 
   const [editing, setEditing] = useState<Profile | null>(null);
   const [editForm, setEditForm] = useState<UpdateUserInput>(EMPTY_EDIT);
+  const [editPermCodes, setEditPermCodes] = useState<string[]>([]);
+  const [editPermLoading, setEditPermLoading] = useState(false);
   const [editErr, setEditErr] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
@@ -121,8 +210,29 @@ export function UsersPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setPermissionsCatalogLoading(true);
+    listPermissions()
+      .then((catalog) => {
+        if (cancelled) return;
+        setPermissionsCatalog(catalog);
+        setPermissionsCatalogErr("");
+      })
+      .catch((cause) => {
+        if (cancelled) return;
+        setPermissionsCatalogErr(cause instanceof Error ? cause.message : "No pudimos cargar la lista de permisos.");
+      })
+      .finally(() => {
+        if (!cancelled) setPermissionsCatalogLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function openInvite() {
-    setInviteForm(EMPTY_INVITE);
+    setInviteForm({ ...EMPTY_INVITE, permisos: [...DEFAULT_PERMISSION_CODES] });
     setInviteErr("");
     setInviteSent(false);
     setInviteOpen(true);
@@ -152,7 +262,7 @@ export function UsersPage() {
     }
   }
 
-  function openEdit(userProfile: Profile) {
+  async function openEdit(userProfile: Profile) {
     if (userProfile.rol === "admin") return;
     setEditing(userProfile);
     setEditForm({
@@ -162,6 +272,15 @@ export function UsersPage() {
       rol: userProfile.rol,
     });
     setEditErr("");
+    setEditPermCodes([]);
+    setEditPermLoading(true);
+    try {
+      setEditPermCodes(await getUserPermissionCodes(userProfile.id));
+    } catch (cause) {
+      setEditErr(cause instanceof Error ? cause.message : "No pudimos cargar los permisos actuales.");
+    } finally {
+      setEditPermLoading(false);
+    }
   }
 
   async function submitEdit(event: FormEvent<HTMLFormElement>) {
@@ -195,6 +314,7 @@ export function UsersPage() {
     setEditSaving(true);
     try {
       await updateUser(editing.id, editForm);
+      await setUserPermissions(editing.id, editPermCodes);
       setEditing(null);
       await load();
     } catch (cause) {
@@ -384,7 +504,7 @@ export function UsersPage() {
                   </p>
                 ) : (
                   <div className="grid grid-cols-2 gap-2 border-t border-pf-border-soft pt-3">
-                    <Button type="button" variant="secondary" className="px-2" aria-label={`Editar ${userProfile.nombre}`} onClick={() => openEdit(userProfile)}>
+                    <Button type="button" variant="secondary" className="px-2" aria-label={`Editar ${userProfile.nombre}`} onClick={() => void openEdit(userProfile)}>
                       <Pencil className="h-4 w-4" strokeWidth={2} aria-hidden />Editar
                     </Button>
                     <Button
@@ -422,7 +542,7 @@ export function UsersPage() {
                           <p className="text-right text-xs font-semibold text-pf-muted">Cuenta protegida</p>
                         ) : (
                           <div className="flex justify-end gap-2">
-                            <Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Editar ${userProfile.nombre}`} onClick={() => openEdit(userProfile)}>
+                            <Button type="button" variant="secondary" className="min-h-9 rounded-lg px-3 py-1.5 text-xs" aria-label={`Editar ${userProfile.nombre}`} onClick={() => void openEdit(userProfile)}>
                               <Pencil className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />Editar
                             </Button>
                             <Button
@@ -471,6 +591,14 @@ export function UsersPage() {
             <Field label="Rol" htmlFor="invite-rol">
               <Input id="invite-rol" value="Prestamista" readOnly aria-readonly="true" />
             </Field>
+            <PermissionsChecklist
+              catalog={permissionsCatalog}
+              catalogError={permissionsCatalogErr}
+              loading={permissionsCatalogLoading}
+              disabled={inviteSending}
+              selected={inviteForm.permisos}
+              onChange={(codes) => setInviteForm((current) => ({ ...current, permisos: codes }))}
+            />
             {inviteErr ? <p className="text-sm font-medium text-pf-danger" role="alert">{inviteErr}</p> : null}
             <div className="flex flex-col-reverse gap-2 border-t border-pf-border-soft pt-4 sm:flex-row sm:justify-end">
               <Button variant="secondary" type="button" onClick={() => setInviteOpen(false)} disabled={inviteSending}>Cancelar</Button>
@@ -506,6 +634,14 @@ export function UsersPage() {
                 : "Active primero al prestamista para poder transferirle la cuenta maestra."}
             </span>
           </Field>
+          <PermissionsChecklist
+            catalog={permissionsCatalog}
+            catalogError={permissionsCatalogErr}
+            loading={permissionsCatalogLoading || editPermLoading}
+            disabled={editSaving}
+            selected={editPermCodes}
+            onChange={setEditPermCodes}
+          />
           {editErr ? <p className="text-sm font-medium text-pf-danger" role="alert">{editErr}</p> : null}
           <div className="flex flex-col-reverse gap-2 border-t border-pf-border-soft pt-4 sm:flex-row sm:justify-end">
             <Button variant="secondary" type="button" onClick={() => setEditing(null)} disabled={editSaving}>Cancelar</Button>

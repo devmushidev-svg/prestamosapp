@@ -8,6 +8,14 @@ export type EstadoCliente = "activo" | "moroso" | "cancelado";
  */
 export type Rol = "admin" | "prestamista" | "gerente" | "cobrador" | "supervisor";
 
+/** Catálogo fijo de acciones que se pueden conceder a un usuario no-admin. */
+export type Permission = {
+  code: string;
+  etiqueta: string;
+  descripcion: string | null;
+  orden: number;
+};
+
 export type Empresa = {
   id: string;
   nombre: string;
@@ -157,6 +165,36 @@ export type Gestion = {
   fecha_promesa: string | null;
   pago_id: string | null;
   notas: string | null;
+  creado_en: string;
+};
+
+export type TipoSolicitud = "prestamo" | "cancelacion_pago";
+export type EstadoSolicitud = "pendiente" | "aprobada" | "rechazada";
+
+export type DatosSolicitudPrestamo = {
+  clienteId: string;
+  monto: number;
+  tasaInteres: number;
+  plazo: number;
+  frecuencia: FrecuenciaPago;
+  fechaInicio: string;
+  diaPagoSemana: DiaPagoSemana | null;
+};
+
+/** Solicitudes que requieren aprobación de la cuenta maestra antes de ejecutarse. */
+export type Solicitud = {
+  id: string;
+  empresa_id: string;
+  tipo: TipoSolicitud;
+  solicitante_id: string;
+  estado: EstadoSolicitud;
+  datos: DatosSolicitudPrestamo;
+  motivo_solicitud: string | null;
+  motivo_resolucion: string | null;
+  resuelto_por: string | null;
+  resuelto_en: string | null;
+  prestamo_resultante_id: string | null;
+  pago_afectado_id: string | null;
   creado_en: string;
 };
 

@@ -20,6 +20,11 @@ const CORS_HEADERS = {
 
 const ROLES_INVITABLES = new Set(["prestamista"]);
 
+// Si el admin no envía una selección, un cobrador nuevo arranca solo con
+// estos tres permisos activados; el resto queda apagado hasta que el admin
+// los active desde Usuarios.
+const PERMISOS_POR_DEFECTO = ["prestamos.solicitar", "pagos.registrar", "caja.cierre"];
+
 function configuredRedirectOrigins(): Set<string> {
   const configured = [
     Deno.env.get("APP_URL") ?? "",
@@ -147,6 +152,9 @@ async function handleInvite(req: Request): Promise<Response> {
   const telefono = String(payload?.telefono ?? "").trim();
   const rol = String(payload?.rol ?? "prestamista").trim();
   const redirectTo = safeInviteRedirect(payload?.redirectTo);
+  const permisosSolicitados = Array.isArray(payload?.permisos)
+    ? Array.from(new Set(payload.permisos.map((code: unknown) => String(code).trim()).filter(Boolean)))
+    : null;
 
   if (!redirectTo) {
     return respond({
@@ -213,6 +221,42 @@ async function handleInvite(req: Request): Promise<Response> {
       message: "No se pudo completar la invitación. Intente de nuevo.",
       detail: profileError.message,
     }, 500);
+  }
+
+  // Valida contra el catálogo real (nunca confía en códigos enviados por el
+  // cliente) y cae en los permisos por defecto si el admin no envió ninguno.
+  const { data: catalogo, error: catalogoError } = await admin.from("permissions").select("code");
+  if (catalogoError) {
+    console.error("[invite-user] no se pudo leer el catálogo de permisos:", JSON.stringify(catalogoError));
+    await admin.auth.admin.deleteUser(invited.user.id).catch(() => undefined);
+    return respond({ ok: false, message: "No se pudo completar la invitación. Intente de nuevo." }, 500);
+  }
+  const codigosValidos = new Set((catalogo ?? []).map((row: { code: string }) => row.code));
+  // `permisosSolicitados` es `null` solo si el cliente no mandó el campo; una
+  // lista vacía explícita (el admin marcó "Ninguno") se respeta tal cual.
+  const permisosFinales = (permisosSolicitados ?? PERMISOS_POR_DEFECTO)
+    .filter((code) => codigosValidos.has(code));
+
+  if (permisosFinales.length > 0) {
+    const { error: permisosError } = await admin.from("user_permissions").insert(
+      permisosFinales.map((code) => ({
+        profile_id: invited.user.id,
+        empresa_id: callerProfile.empresa_id,
+        permission_code: code,
+        creado_por: callerProfile.id,
+      })),
+    );
+    if (permisosError) {
+      console.error("[invite-user] no se pudieron guardar los permisos:", JSON.stringify(permisosError));
+      // `profiles.id` referencia a auth.users con ON DELETE CASCADE: borrar el
+      // usuario de Auth también retira el profile que se acababa de crear.
+      await admin.auth.admin.deleteUser(invited.user.id).catch(() => undefined);
+      return respond({
+        ok: false,
+        message: "No se pudo completar la invitación. Intente de nuevo.",
+        detail: permisosError.message,
+      }, 500);
+    }
   }
 
   return respond({ ok: true, userId: invited.user.id });

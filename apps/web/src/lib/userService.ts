@@ -6,7 +6,10 @@ import {
   listOfflineOperations,
   restoreOfflineAccess,
 } from "./offlineDb";
-import type { Profile, Rol } from "../types";
+import type { Permission, Profile, Rol } from "../types";
+
+/** Permisos activados por defecto para un cobrador/prestamista recién invitado. */
+export const DEFAULT_PERMISSION_CODES = ["prestamos.solicitar", "pagos.registrar", "caja.cierre"];
 
 export type InviteUserInput = {
   nombre: string;
@@ -14,6 +17,7 @@ export type InviteUserInput = {
   email: string;
   telefono: string;
   rol: Rol;
+  permisos: string[];
 };
 
 export type UpdateUserInput = {
@@ -92,6 +96,69 @@ export async function listUsers(): Promise<Profile[]> {
   return (data ?? []) as Profile[];
 }
 
+function isMissingPermissionsSchema(error: { code?: string; message?: string }): boolean {
+  return ["PGRST205", "42P01", "PGRST202", "42883"].includes(error.code ?? "");
+}
+
+export async function listPermissions(): Promise<Permission[]> {
+  const { data, error } = await supabase.from("permissions").select("*").order("orden");
+  if (error) {
+    // eslint-disable-next-line no-console
+    console.error("[permissions] no se pudo leer el catálogo:", error);
+    if (isMissingPermissionsSchema(error)) {
+      throw new Error("Falta aplicar la migración de permisos en Supabase (tabla \"permissions\").");
+    }
+    throw new Error(friendlyMessage(error, "No pudimos cargar la lista de permisos."));
+  }
+  return (data ?? []) as Permission[];
+}
+
+export async function getUserPermissionCodes(profileId: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("user_permissions")
+    .select("permission_code")
+    .eq("profile_id", profileId);
+  if (error) {
+    // eslint-disable-next-line no-console
+    console.error("[permissions] no se pudieron leer los permisos del usuario:", error);
+    if (isMissingPermissionsSchema(error)) {
+      throw new Error("Falta aplicar la migración de permisos en Supabase (tabla \"user_permissions\").");
+    }
+    throw new Error(friendlyMessage(error, "No pudimos cargar los permisos del usuario."));
+  }
+  return (data ?? []).map((row) => row.permission_code as string);
+}
+
+function permissionErrorMessage(cause: unknown): string {
+  const error = cause as { code?: string; message?: string } | null;
+  const message = error?.message?.toLowerCase() ?? "";
+  if (isMissingPermissionsSchema(error ?? {})) {
+    return "Falta aplicar la migración de permisos en Supabase (función \"set_user_permissions\").";
+  }
+  if (error?.code === "42501" || message.includes("solo un administrador")) {
+    return "Solo un administrador puede modificar los permisos.";
+  }
+  if (error?.code === "23503" || message.includes("no pertenece a su empresa")) {
+    return "El usuario indicado no pertenece a esta empresa.";
+  }
+  if (message.includes("cuenta maestra ya tiene acceso completo")) {
+    return "La cuenta maestra ya tiene acceso completo; no necesita permisos individuales.";
+  }
+  return "No pudimos guardar los permisos del usuario.";
+}
+
+export async function setUserPermissions(profileId: string, codes: string[]): Promise<void> {
+  const { error } = await supabase.rpc("set_user_permissions", {
+    p_profile_id: profileId,
+    p_codes: codes,
+  });
+  if (error) {
+    // eslint-disable-next-line no-console
+    console.error("[permissions] no se pudieron guardar los permisos:", error);
+    throw new Error(permissionErrorMessage(error));
+  }
+}
+
 export async function inviteUser(input: InviteUserInput): Promise<void> {
   const { data, error } = await supabase.functions.invoke<{ ok: boolean; message?: string; detail?: string }>("invite-user", {
     body: {
@@ -100,6 +167,7 @@ export async function inviteUser(input: InviteUserInput): Promise<void> {
       email: input.email.trim().toLowerCase(),
       telefono: input.telefono.trim(),
       rol: input.rol,
+      permisos: input.permisos,
       redirectTo: `${window.location.origin}/restablecer-password`,
     },
   });

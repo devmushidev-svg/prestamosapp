@@ -41,7 +41,16 @@ export type OfflineSyncResult = {
   attention: number;
 };
 
+function isPermissionDenied(cause: unknown): boolean {
+  if (!cause || typeof cause !== "object") return false;
+  const error = cause as { code?: string; message?: string };
+  return error.code === "42501" || (error.message ?? "").toLowerCase().includes("row-level security");
+}
+
 function errorMessage(cause: unknown): string {
+  if (isPermissionDenied(cause)) {
+    return "No tiene permiso para realizar esta operación. Pida a la cuenta maestra que revise sus permisos.";
+  }
   if (cause instanceof Error) return cause.message;
   if (cause && typeof cause === "object" && "message" in cause) return String(cause.message);
   return "No se pudo sincronizar esta operación.";

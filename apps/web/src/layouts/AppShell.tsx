@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Banknote, BarChart3, Building2, CalendarClock, ChevronDown, FileClock, FilePlus2, HandCoins, Home, LogOut, Menu, MonitorSmartphone, Route, Settings, Settings2, User, UserCog, Users, Wallet, X } from "lucide-react";
+import { Banknote, BarChart3, Building2, CalendarClock, ChevronDown, ClipboardList, FileClock, FilePlus2, HandCoins, Home, LogOut, Menu, MonitorSmartphone, Route, SendHorizonal, Settings, Settings2, User, UserCog, Users, Wallet, X } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { useProfile } from "../auth/ProfileContext";
@@ -14,6 +14,10 @@ type NavItem = {
   label: string;
   icon: LucideIcon;
   end?: boolean;
+  /** Si se define, el ítem solo aparece cuando `hasPermission(permission)` es verdadero (el admin siempre lo cumple). */
+  permission?: string;
+  /** Flujos de "solicitar": aunque el admin siempre cumple el permiso, no tiene sentido que se pida aprobación a sí mismo. */
+  soloPrestamista?: boolean;
 };
 
 type TabId = "inicio" | "cartera" | "empresa" | "ajustes";
@@ -39,7 +43,9 @@ const RIBBON: Record<TabId, RibbonGroupDef[]> = {
       title: "Préstamos",
       items: [
         { to: "/prestamos", label: "Préstamos", icon: HandCoins, end: true },
-        { to: "/prestamos/nuevo", label: "Nuevo préstamo", icon: FilePlus2 },
+        { to: "/prestamos/nuevo", label: "Nuevo préstamo", icon: FilePlus2, permission: "prestamos.crear" },
+        { to: "/prestamos/solicitar", label: "Solicitar préstamo", icon: SendHorizonal, permission: "prestamos.solicitar", soloPrestamista: true },
+        { to: "/prestamos/mis-solicitudes", label: "Mis solicitudes", icon: ClipboardList, permission: "prestamos.solicitar", soloPrestamista: true },
       ],
     },
     {
@@ -51,7 +57,7 @@ const RIBBON: Record<TabId, RibbonGroupDef[]> = {
       items: [
         { to: "/agenda", label: "Agenda", icon: CalendarClock, end: true },
         { to: "/pagos", label: "Pagos", icon: FileClock, end: true },
-        { to: "/pagos/nuevo", label: "Registrar pago", icon: Banknote },
+        { to: "/pagos/nuevo", label: "Registrar pago", icon: Banknote, permission: "pagos.registrar" },
         { to: "/reportes", label: "Reportes", icon: BarChart3 },
       ],
     },
@@ -65,6 +71,10 @@ const RIBBON: Record<TabId, RibbonGroupDef[]> = {
       title: "Equipo",
       items: [{ to: "/configuracion/usuarios", label: "Usuarios de la empresa", icon: UserCog, end: true }],
     },
+    {
+      title: "Aprobaciones",
+      items: [{ to: "/solicitudes", label: "Solicitudes", icon: ClipboardList, end: true }],
+    },
   ],
   ajustes: [
     {
@@ -73,6 +83,23 @@ const RIBBON: Record<TabId, RibbonGroupDef[]> = {
     },
   ],
 };
+
+/** El "empresa" tab ya lo filtra `isAdmin` en `visibleTabs`; aquí solo se recorta por permiso individual dentro de cada grupo. */
+function visibleGroups(
+  groups: RibbonGroupDef[],
+  hasPermission: (code: string) => boolean,
+  isAdmin: boolean
+): RibbonGroupDef[] {
+  return groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => {
+        if (item.soloPrestamista && isAdmin) return false;
+        return !item.permission || hasPermission(item.permission);
+      }),
+    }))
+    .filter((group) => group.items.length > 0);
+}
 
 const TAB_DEFAULT_PATH: Record<TabId, string> = {
   inicio: "/",
@@ -161,7 +188,7 @@ function RibbonLink({ item, onNavigate, stack }: { item: NavItem; onNavigate?: (
 
 function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
   const location = useLocation();
-  const { isAdmin } = useProfile();
+  const { isAdmin, hasPermission } = useProfile();
   const activeSection = tabFromPath(location.pathname);
   const [openSections, setOpenSections] = useState<Record<TabId, boolean>>(() => ({
     inicio: false,
@@ -199,7 +226,7 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
       <div className="space-y-2">
         {TABS.filter((tab) => tab.id !== "inicio" && (isAdmin || tab.id !== "empresa")).map((tab) => {
           const TabIcon = tab.icon;
-          const groups = RIBBON[tab.id].filter((g) => g.items.length > 0);
+          const groups = visibleGroups(RIBBON[tab.id], hasPermission, isAdmin);
           if (groups.length === 0) return null;
           return (
             <section
@@ -250,7 +277,7 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
 
 export function AppShell({ children }: { children?: ReactNode }) {
   const { user, logout } = useAuth();
-  const { isAdmin } = useProfile();
+  const { isAdmin, hasPermission } = useProfile();
   const { config } = useBusinessConfig();
   const location = useLocation();
   const navigate = useNavigate();
@@ -313,7 +340,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
       ));
   }
 
-  const ribbonGroups = RIBBON[activeTab].filter((g) => g.items.length > 0);
+  const ribbonGroups = visibleGroups(RIBBON[activeTab], hasPermission, isAdmin);
   const showRibbon = activeTab !== "inicio" && ribbonGroups.length > 0;
 
   return (

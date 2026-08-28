@@ -33,6 +33,10 @@ type ProfileState = {
   status: ProfileStatus;
   error: string;
   isAdmin: boolean;
+  /** Códigos de `permissions` concedidos explícitamente (no incluye el comodín de admin). */
+  permissions: Set<string>;
+  /** El admin siempre puede; el resto depende de `permissions`. La autorización real vive en RLS/RPC, esto solo es para pintar la interfaz. */
+  hasPermission: (code: string) => boolean;
   reload: (options?: { silent?: boolean; recoverInvalidAccess?: boolean }) => Promise<void>;
 };
 
@@ -65,6 +69,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [status, setStatus] = useState<ProfileStatus>("loading");
   const [error, setError] = useState("");
+  const [permissions, setPermissions] = useState<Set<string>>(new Set());
   const requestIdRef = useRef(0);
   const profileRef = useRef<Profile | null>(null);
 
@@ -294,9 +299,36 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   // se mantiene el comportamiento previo (una sola cuenta maestra implícita)
   // para no bloquear la instalación existente.
   const isAdmin = status === "missing_schema" || (status === "ready" && profile?.rol === "admin" && profile.activo);
+
+  useEffect(() => {
+    if (!profile || status !== "ready" || offlineSession || isAdmin) {
+      setPermissions(new Set());
+      return;
+    }
+    let cancelled = false;
+    void supabase.rpc("mis_permisos").then(({ data, error: rpcError }) => {
+      if (cancelled) return;
+      if (rpcError) {
+        // La migración de permisos pudo no estar aplicada todavía; no bloquea
+        // el resto de la aplicación, solo deja la navegación sin esas opciones.
+        // eslint-disable-next-line no-console
+        console.warn("No se pudieron cargar los permisos del usuario:", rpcError);
+        return;
+      }
+      setPermissions(new Set((data ?? []) as string[]));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [profile?.id, profile?.rol, profile?.activo, status, offlineSession, isAdmin]);
+
+  const hasPermission = useCallback(
+    (code: string) => Boolean(isAdmin) || permissions.has(code),
+    [isAdmin, permissions]
+  );
   const value = useMemo(
-    () => ({ profile, status, error, isAdmin: Boolean(isAdmin), reload }),
-    [profile, status, error, isAdmin, reload]
+    () => ({ profile, status, error, isAdmin: Boolean(isAdmin), permissions, hasPermission, reload }),
+    [profile, status, error, isAdmin, permissions, hasPermission, reload]
   );
 
   return <ProfileContext.Provider value={value}>{children}</ProfileContext.Provider>;
